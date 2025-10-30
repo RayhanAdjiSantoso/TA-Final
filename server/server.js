@@ -19,10 +19,10 @@ const authRoutes = require('./routes/auth');
 
 // Konfigurasi koneksi PostgreSQL
 const pool = new Pool({
-  user: process.env.DB_USER || 'rayhanadjisantoso',
+  user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'TA',
-  password: process.env.DB_PASSWORD || 'rayhan123',
+  password: process.env.DB_PASSWORD || 'postgres',
   port: process.env.DB_PORT || 5432,
 });
 
@@ -103,8 +103,8 @@ app.get('/api/database/:dbValue/tables', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -114,6 +114,15 @@ app.get('/api/database/:dbValue/tables', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -183,8 +192,8 @@ app.get('/api/databases', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -194,6 +203,15 @@ app.get('/api/databases', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -410,8 +428,8 @@ app.post('/api/visualizations', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -421,6 +439,15 @@ app.post('/api/visualizations', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -640,8 +667,8 @@ app.post('/api/analisis', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -651,6 +678,15 @@ app.post('/api/analisis', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -872,8 +908,8 @@ app.get('/api/database/:dbValue/visualisasi', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -883,6 +919,15 @@ app.get('/api/database/:dbValue/visualisasi', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -927,8 +972,8 @@ app.get('/api/database/:dbValue/parameter_visualisasi', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -938,6 +983,15 @@ app.get('/api/database/:dbValue/parameter_visualisasi', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -982,8 +1036,8 @@ app.get('/api/database/:dbValue/analisis', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -993,6 +1047,15 @@ app.get('/api/database/:dbValue/analisis', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -1037,8 +1100,8 @@ app.get('/api/database/:dbValue/table/:table/count', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -1048,6 +1111,15 @@ app.get('/api/database/:dbValue/table/:table/count', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -1082,8 +1154,8 @@ app.get('/api/database/:dbValue/analisis-with-visualisasi', async (req, res) => 
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -1093,6 +1165,15 @@ app.get('/api/database/:dbValue/analisis-with-visualisasi', async (req, res) => 
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     
@@ -1156,8 +1237,8 @@ app.get('/api/database/:dbValue/data/:table', async (req, res) => {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
         database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres'
       },
       {
         name: 'MySQL Secondary',
@@ -1167,6 +1248,15 @@ app.get('/api/database/:dbValue/data/:table', async (req, res) => {
         database: process.env.DB_NAME_2 || 'ta_fin',
         user: process.env.DB_USER_2 || 'root',
         password: process.env.DB_PASSWORD_2 || 'rayhan2510'
+      },
+      {
+        name: 'DWH Lake',
+        value: 'mysql_dwh_lake',
+        host: process.env.DB_HOST_2 || 'localhost',
+        port: process.env.DB_PORT_2 || 3306,
+        database: process.env.DB_NAME_2 || 'dwh_lake',
+        user: process.env.DB_USER_2 || 'root',
+        password: process.env.DB_PASSWORD_2 || 'TheJarrdin*DWH25'
       }
     ];
     

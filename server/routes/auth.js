@@ -4,10 +4,10 @@ const { Pool } = require('pg');
 
 // Konfigurasi database PostgreSQL (sama dengan server.js)
 const pool = new Pool({
-  user: process.env.DB_USER || 'rayhanadjisantoso',
+  user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'TA',
-  password: process.env.DB_PASSWORD || 'rayhan123',
+  password: process.env.DB_PASSWORD || 'postgres',
   port: process.env.DB_PORT || 5432,
 });
 
