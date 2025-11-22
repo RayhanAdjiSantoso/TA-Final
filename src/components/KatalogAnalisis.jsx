@@ -95,13 +95,6 @@ const KatalogAnalisis = ({ activeTabProp }) => {
           setVisualisasiData(sortedVisualisasi);
         }
 
-        const parameterResponse = await fetch(`http://localhost:5002/api/database/${selectedDatabase}/parameter_visualisasi`);
-        if (parameterResponse.ok) {
-          const parameter = await parameterResponse.json();
-          setParameterData(parameter);
-        }
-
-        // PERUBAHAN DI SINI - Gunakan endpoint baru
         const analisisResponse = await fetch(`http://localhost:5002/api/database/${selectedDatabase}/analisis-with-visualisasi`);
         if (analisisResponse.ok) {
           const analisis = await analisisResponse.json();
@@ -119,6 +112,9 @@ const KatalogAnalisis = ({ activeTabProp }) => {
   
   // Fungsi untuk memilih analisis dari katalog
   const handleAnalisisSelect = async (analisis) => {
+    console.log('=== HANDLE ANALISIS SELECT ===');
+    console.log('Analisis clicked:', analisis);
+    
     if (selectedAnalisis && selectedAnalisis.id_analisis === analisis.id_analisis) {
       setSelectedAnalisis(null);
       setPreviewVisualisasi([]);
@@ -128,40 +124,83 @@ const KatalogAnalisis = ({ activeTabProp }) => {
     }
     
     setSelectedAnalisis(analisis);
-    setEditedJudul(analisis.judul);
-    setEditedMasalah(analisis.masalah);
-    setEditedInterpretasi(analisis.interpretasi_hasil);
+    setEditedJudul(analisis.judul || '');
+    setEditedMasalah(analisis.rumusan_masalah || '');
+    setEditedInterpretasi(analisis.interpretasi_hasil || '');
     setIsEditingAnalisis(false);
     
     try {
-      const response = await fetch(`http://localhost:5002/api/analisis/${analisis.id_analisis}/visualisasi`);
-      if (!response.ok) throw new Error('Gagal mengambil data visualisasi untuk analisis');
+      console.log('=== DEBUG VISUALISASI ===');
+      console.log('Selected database:', selectedDatabase);
+      console.log('Analisis ID:', analisis.id_analisis);
+      console.log('Analisis penyimpanan_database:', analisis.penyimpanan_database);
       
-      const visualisasiIds = await response.json();
-      const relatedVisualizations = visualisasiData.filter(v => visualisasiIds.includes(v.id_visualisasi));
+      // Fetch visualisasi IDs yang terkait dengan analisis
+      const idsResponse = await fetch(`http://localhost:5002/api/analisis/${analisis.id_analisis}/visualisasi`);
+      console.log('IDs Response status:', idsResponse.status);
+      
+      if (!idsResponse.ok) {
+        const errorText = await idsResponse.text();
+        console.error('Response error:', errorText);
+        throw new Error('Gagal mengambil data visualisasi untuk analisis');
+      }
+      
+      const visualisasiIds = await idsResponse.json();
+      console.log('Visualisasi IDs dari API:', visualisasiIds);
+      
+      if (visualisasiIds.length === 0) {
+        console.warn('No visualisasi IDs found for this analisis');
+        setPreviewVisualisasi([]);
+        setChartDataMap({});
+        return;
+      }
+      
+      // Fetch detail visualisasi langsung dari API berdasarkan IDs
+      // Ini akan mengambil visualisasi dari database manapun
+      const visualisasiPromises = visualisasiIds.map(id => 
+        fetch(`http://localhost:5002/api/visualizations/${id}`).then(res => res.json())
+      );
+      
+      const relatedVisualizations = await Promise.all(visualisasiPromises);
+      console.log('Fetched visualizations details:', relatedVisualizations.map(v => ({
+        id: v.id_visualisasi,
+        judul: v.judul,
+        db: v.penyimpanan_database
+      })));
       
       if (relatedVisualizations.length > 0) {
-        const newChartDataMap = { ...chartDataMap };
+        const newChartDataMap = {};
         
         for (const vis of relatedVisualizations) {
+          console.log('Processing visualization:', vis.id_visualisasi, vis.judul);
           let chartData;
           
           if (vis.chart_data) {
-            chartData = JSON.parse(vis.chart_data);
+            console.log('Using chart_data from vis');
+            const parsed = typeof vis.chart_data === 'string' 
+              ? JSON.parse(vis.chart_data) 
+              : vis.chart_data;
+            chartData = parsed;
           } else if (vis.query_sql) {
+            console.log('Executing query_sql:', vis.query_sql);
             chartData = await executeQuery(vis.query_sql);
           }
           
+          console.log('Chart data for vis', vis.id_visualisasi, ':', chartData?.length, 'rows');
           newChartDataMap[vis.id_visualisasi] = chartData;
         }
         
+        console.log('Final chartDataMap:', Object.keys(newChartDataMap));
         setChartDataMap(newChartDataMap);
         setPreviewVisualisasi(relatedVisualizations);
       } else {
+        console.warn('No related visualizations found!');
         setPreviewVisualisasi([]);
+        setChartDataMap({});
       }
     } catch (err) {
       console.error('Error loading visualizations for analysis:', err);
+      console.error('Error stack:', err.stack);
     }
   };
 
@@ -195,9 +234,9 @@ const KatalogAnalisis = ({ activeTabProp }) => {
   // Fungsi untuk EndUser batal edit analisis
   const handleCancelEditAnalisis = () => {
     setIsEditingAnalisis(false);
-    setEditedJudul(selectedAnalisis.judul);
-    setEditedMasalah(selectedAnalisis.masalah);
-    setEditedInterpretasi(selectedAnalisis.interpretasi_hasil);
+    setEditedJudul(selectedAnalisis.judul || '');
+    setEditedMasalah(selectedAnalisis.rumusan_masalah || '');
+    setEditedInterpretasi(selectedAnalisis.interpretasi_hasil || '');
   };
 
   // Fungsi untuk EndUser simpan edit analisis
@@ -220,7 +259,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
       // Update data analisis di state
       const updatedAnalisisData = analisisData.map(item => 
         item.id_analisis === selectedAnalisis.id_analisis 
-          ? { ...item, judul: editedJudul, masalah: editedMasalah, interpretasi_hasil: editedInterpretasi }
+          ? { ...item, judul: editedJudul, rumusan_masalah: editedMasalah, interpretasi_hasil: editedInterpretasi }
           : item
       );
       setAnalisisData(updatedAnalisisData);
@@ -229,7 +268,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
       setSelectedAnalisis({
         ...selectedAnalisis,
         judul: editedJudul,
-        masalah: editedMasalah,
+        rumusan_masalah: editedMasalah,
         interpretasi_hasil: editedInterpretasi
       });
 
@@ -247,6 +286,33 @@ const KatalogAnalisis = ({ activeTabProp }) => {
       setTimeout(() => setSaveError(false), 3000);
     }
   };
+
+  // Fungsi helper untuk konversi data ke number
+  const parseChartData = (data, xKey, yKey, chartType) => {
+    if (!data) return [];
+    
+    return data.map(item => {
+      const parsedItem = { ...item };
+      
+      // Konversi yKey ke number jika berupa string
+      if (yKey && parsedItem[yKey] !== undefined && parsedItem[yKey] !== null) {
+        const numValue = parseFloat(parsedItem[yKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[yKey] = numValue;
+        }
+      }
+      
+      // Hanya untuk scatter chart, konversi xKey ke number
+      if (chartType === 'scatter' && xKey && parsedItem[xKey] !== undefined && parsedItem[xKey] !== null) {
+        const numValue = parseFloat(parsedItem[xKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[xKey] = numValue;
+        }
+      }
+      
+      return parsedItem;
+    });
+  };
   
   // Fungsi untuk render grafik berdasarkan jenis
   const renderChart = (visualisasi, chartData) => {
@@ -254,20 +320,21 @@ const KatalogAnalisis = ({ activeTabProp }) => {
       return <div className="no-chart-data">Tidak ada data untuk visualisasi ini</div>;
     }
     
-    const parameter = parameterData.find(p => p.id_visualisasi === visualisasi.id_visualisasi);
+    const dataKey = visualisasi.parameter_x;
+    const valueKey = visualisasi.parameter_y;
     
-    if (!parameter) {
-      return <div className="no-chart-data">Parameter visualisasi tidak ditemukan</div>;
+    if (!dataKey || !valueKey) {
+      return <div className="no-chart-data">Parameter visualisasi tidak lengkap</div>;
     }
     
-    const dataKey = parameter.parameter_x;
-    const valueKey = parameter.parameter_y;
     const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#8DD1E1'];
+
+    const parsedChartData = parseChartData(chartData, dataKey, valueKey, visualisasi.jenis_grafik);
     
     return (
       <ResponsiveContainer width="100%" height={400}>
         {visualisasi.jenis_grafik === 'bar' ? (
-          <BarChart data={chartData}>
+          <BarChart data={parsedChartData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey={dataKey} />
             <YAxis />
@@ -281,7 +348,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
             <Bar dataKey={valueKey} fill="#8884d8" name={valueKey} />
           </BarChart>
         ) : visualisasi.jenis_grafik === 'line' ? (
-          <LineChart data={chartData}>
+          <LineChart data={parsedChartData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey={dataKey} />
             <YAxis />
@@ -297,7 +364,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
         ) : visualisasi.jenis_grafik === 'pie' ? (
           <PieChart>
             <Pie
-              data={chartData}
+              data={parsedChartData}
               cx="50%"
               cy="50%"
               labelLine={true}
@@ -331,7 +398,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                 { value: `Sumbu Y: ${valueKey}`, type: 'rect', color: '#8884d8' }
               ]}
             />
-            <Scatter name={`${dataKey} vs ${valueKey}`} data={chartData} fill="#8884d8" />
+            <Scatter name={`${dataKey} vs ${valueKey}`} data={parsedChartData} fill="#8884d8" />
           </ScatterChart>
         )}
       </ResponsiveContainer>
@@ -486,7 +553,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                                 className={selectedAnalisis && selectedAnalisis.id_analisis === item.id_analisis ? 'cancel-button' : 'view-button'}
                                 onClick={() => handleAnalisisSelect(item)}
                               >
-                                {selectedAnalisis && selectedAnalisis.id_analisis === item.id_analisis ? 'Batal' : 'Lihat'}
+                                {selectedAnalisis && selectedAnalisis.id_analisis === item.id_analisis ? 'Tutup' : 'Lihat'}
                               </button>
                               
                               {/* Tombol Hapus - Hanya untuk Admin dan Analis */}
@@ -521,7 +588,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                   <div className="analisis-content">
                     
                     {/* Judul - Editable untuk EndUser */}
-                    {isEditingAnalisis && isEndUser() ? (
+                    {isEditingAnalisis && (isEndUser() || isAnalis()) ? (
                       <div className="form-group">
                         <label>Judul Analisis:</label>
                         <input
@@ -538,7 +605,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                     {/* Rumusan Masalah - Editable untuk EndUser */}
                     <div className="analisis-section">
                       <h4>Rumusan Masalah:</h4>
-                      {isEditingAnalisis && isEndUser() ? (
+                      {isEditingAnalisis && (isEndUser() || isAnalis()) ? (
                         <textarea
                           className="form-textarea"
                           value={editedMasalah}
@@ -546,7 +613,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                           rows={4}
                         />
                       ) : (
-                        <p>{selectedAnalisis.masalah}</p>
+                        <p>{selectedAnalisis.rumusan_masalah}</p>
                       )}
                     </div>
                     
@@ -579,7 +646,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                     {/* Interpretasi Hasil - Editable untuk EndUser */}
                     <div className="analisis-section">
                       <h4>Interpretasi Hasil:</h4>
-                      {isEditingAnalisis && isEndUser() ? (
+                      {isEditingAnalisis && (isEndUser() || isAnalis()) ? (
                         <textarea
                           className="form-textarea"
                           value={editedInterpretasi}
@@ -594,7 +661,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                     {/* Tombol Aksi */}
                     <div className="button-group">
                       {/* Tombol untuk EndUser */}
-                      {isEndUser() && !isEditingAnalisis && (
+                      {(isEndUser() || isAnalis()) && !isEditingAnalisis && (
                         <button 
                           className="save-button" 
                           onClick={handleStartEditAnalisis}
@@ -605,7 +672,7 @@ const KatalogAnalisis = ({ activeTabProp }) => {
                       )}
                       
                       {/* Tombol Simpan dan Batal saat editing - EndUser */}
-                      {isEndUser() && isEditingAnalisis && (
+                      {(isEndUser() || isAnalis()) && isEditingAnalisis && (
                         <>
                           <button 
                             className="save-button" 

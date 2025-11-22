@@ -30,12 +30,11 @@ const KatalogData = ({ activeTabProp }) => {
   // State untuk tampilan (katalog atau hidden)
   const [viewMode, setViewMode] = useState('catalog');
   
-  // PERBAIKAN: Initialize hiddenTables langsung dari localStorage
+  // Initialize hiddenTables dari localStorage
   const [hiddenTables, setHiddenTables] = useState(() => {
     try {
       const saved = localStorage.getItem('hiddenTables');
       const parsed = saved ? JSON.parse(saved) : [];
-      console.log('Initial load hiddenTables:', parsed);
       return parsed;
     } catch (error) {
       console.error('Error loading initial hidden tables:', error);
@@ -43,11 +42,22 @@ const KatalogData = ({ activeTabProp }) => {
     }
   });
 
+  // State untuk kelola database
+  const [dbForm, setDbForm] = useState({
+    name: '',
+    type: 'postgresql',
+    database: '',
+    user: '',
+    password: ''
+  });
+  const [dbFormStatus, setDbFormStatus] = useState('');
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [isSavingDatabase, setIsSavingDatabase] = useState(false);
+
   // Simpan hidden tables ke localStorage setiap kali berubah
   useEffect(() => {
     try {
       localStorage.setItem('hiddenTables', JSON.stringify(hiddenTables));
-      console.log('Saved hidden tables to localStorage:', hiddenTables);
     } catch (error) {
       console.error('Error saving hidden tables:', error);
     }
@@ -66,18 +76,12 @@ const KatalogData = ({ activeTabProp }) => {
       if (response.ok) {
         const databases = await response.json();
         setAvailableDatabases(databases);
-        if (databases.length > 0) {
+        if (databases.length > 0 && !selectedDatabase) {
           setSelectedDatabase(databases[0].value);
         }
       }
     } catch (error) {
       console.error('Error fetching databases:', error);
-      const defaultDatabases = [
-        { name: 'PostgreSQL Primary', value: 'postgresql_primary', host: 'localhost', port: 5432 },
-        { name: 'MySQL Secondary', value: 'mysql_secondary', host: 'localhost', port: 3306 }
-      ];
-      setAvailableDatabases(defaultDatabases);
-      setSelectedDatabase(defaultDatabases[0].value);
     }
   };
 
@@ -89,8 +93,6 @@ const KatalogData = ({ activeTabProp }) => {
   useEffect(() => {
     const fetchTablesWithRowCount = async () => {
       if (!selectedDatabase) return;
-
-      console.log('Fetching tables with hiddenTables:', hiddenTables);
 
       setLoadingTables(true);
       setSelectedTables([]);
@@ -109,7 +111,6 @@ const KatalogData = ({ activeTabProp }) => {
                 );
                 const countData = await countResponse.json();
                 const isHidden = hiddenTables.includes(tableName);
-                console.log(`Table ${tableName} isHidden:`, isHidden);
                 
                 return {
                   name: tableName,
@@ -127,7 +128,6 @@ const KatalogData = ({ activeTabProp }) => {
             })
           );
 
-          console.log('Tables with count:', tablesWithCount);
           setTablesData(tablesWithCount);
         }
       } catch (error) {
@@ -139,7 +139,7 @@ const KatalogData = ({ activeTabProp }) => {
     };
 
     fetchTablesWithRowCount();
-  }, [selectedDatabase, hiddenTables]); // PENTING: hiddenTables sebagai dependency
+  }, [selectedDatabase, hiddenTables]);
 
   // Handle checkbox selection
   const handleTableSelect = async (tableName) => {
@@ -177,10 +177,8 @@ const KatalogData = ({ activeTabProp }) => {
   // Handle hide table
   const handleHideTable = (tableName) => {
     if (window.confirm(`Apakah Anda yakin ingin menyembunyikan tabel "${tableName}"?`)) {
-      console.log('Hiding table:', tableName);
       const newHiddenTables = [...hiddenTables, tableName];
       setHiddenTables(newHiddenTables);
-      console.log('New hiddenTables:', newHiddenTables);
       
       setSelectedTables(selectedTables.filter(t => t !== tableName));
       const newPreviewData = { ...previewData };
@@ -191,10 +189,8 @@ const KatalogData = ({ activeTabProp }) => {
 
   // Handle unhide table
   const handleUnhideTable = (tableName) => {
-    console.log('Unhiding table:', tableName);
     const newHiddenTables = hiddenTables.filter(t => t !== tableName);
     setHiddenTables(newHiddenTables);
-    console.log('New hiddenTables:', newHiddenTables);
   };
 
   // Get columns from data
@@ -242,9 +238,25 @@ const KatalogData = ({ activeTabProp }) => {
     const formData = new FormData();
     formData.append('file', selectedFile);
 
-    const selectedDbConfigs = availableDatabases.filter(db =>
-      selectedDatabasesForUpload.includes(db.value)
-    );
+    // Pastikan semua field database terkirim
+    const selectedDbConfigs = availableDatabases
+      .filter(db => selectedDatabasesForUpload.includes(db.value))
+      .map(db => ({
+        id_database: db.id_database,
+        nama_database: db.nama_database,
+        label: db.label || db.name,
+        jenis: db.jenis,
+        username: db.username,
+        password: db.password,
+        host: db.host || 'localhost',
+        port: db.port || (db.jenis === 'mysql' ? 3306 : 5432)
+      }));
+
+    console.log('Sending database configs:', selectedDbConfigs.map(db => ({
+      ...db,
+      password: '***' // Hide password in console
+    })));
+
     formData.append('databases', JSON.stringify(selectedDbConfigs));
 
     try {
@@ -260,6 +272,7 @@ const KatalogData = ({ activeTabProp }) => {
         setSelectedFile(null);
         setSelectedDatabasesForUpload([]);
 
+        // Refresh tabel setelah upload
         const tablesResponse = await fetch(`http://localhost:5002/api/database/${selectedDatabase}/tables`);
         if (tablesResponse.ok) {
           const tables = await tablesResponse.json();
@@ -293,6 +306,9 @@ const KatalogData = ({ activeTabProp }) => {
         }
       } else {
         setUploadStatus(`Error: ${result.error}`);
+        if (result.errors) {
+          console.error('Upload errors:', result.errors);
+        }
       }
     } catch (error) {
       console.error('Error uploading file:', error);
@@ -302,14 +318,138 @@ const KatalogData = ({ activeTabProp }) => {
     }
   };
 
-  // Filter tables based on view mode
+  // Handler untuk form database
+  const handleDbFormChange = (field, value) => {
+    setDbForm(prev => ({
+      ...prev,
+      [field]: value
+    }));
+    setDbFormStatus('');
+  };
+
+  // Handler untuk test koneksi database
+  const handleTestConnection = async () => {
+    // Validasi input
+    if (!dbForm.type || !dbForm.database || !dbForm.user || !dbForm.password) {
+      setDbFormStatus('Semua field wajib diisi!');
+      return;
+    }
+
+    setIsTestingConnection(true);
+    setDbFormStatus('Mengetes koneksi...');
+
+    try {
+      const response = await fetch('http://localhost:5002/api/database/test-connection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: dbForm.type,
+          database: dbForm.database,
+          user: dbForm.user,
+          password: dbForm.password
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setDbFormStatus(`✓ ${result.message} (${result.details.host}:${result.details.port})`);
+      } else {
+        setDbFormStatus(`✗ ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error testing connection:', error);
+      setDbFormStatus('✗ Gagal mengetes koneksi!');
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
+  // Handler untuk simpan database
+  const handleSaveDatabase = async () => {
+    // Validasi input
+    if (!dbForm.name || !dbForm.type || !dbForm.database || !dbForm.user || !dbForm.password) {
+      setDbFormStatus('Semua field wajib diisi!');
+      return;
+    }
+
+    setIsSavingDatabase(true);
+    setDbFormStatus('Menyimpan database...');
+
+    try {
+      const response = await fetch('http://localhost:5002/api/database/add', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(dbForm),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setDbFormStatus(`✓ ${result.message}`);
+        
+        // Reset form
+        setDbForm({
+          name: '',
+          type: 'postgresql',
+          database: '',
+          user: '',
+          password: ''
+        });
+
+        // Refresh list database
+        await fetchAvailableDatabases();
+      } else {
+        setDbFormStatus(`✗ ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error saving database:', error);
+      setDbFormStatus('✗ Gagal menyimpan database!');
+    } finally {
+      setIsSavingDatabase(false);
+    }
+  };
+
+  // Handler untuk hapus database
+  const handleDeleteDatabase = async (dbValue, dbName) => {
+    if (!window.confirm(`Apakah Anda yakin ingin menghapus database "${dbName}"?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5002/api/database/${dbValue}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`Database "${dbName}" berhasil dihapus!`);
+        
+        // Jika database yang dihapus sedang dipilih, pilih database pertama
+        if (selectedDatabase === dbValue && availableDatabases.length > 1) {
+          setSelectedDatabase(availableDatabases[0].value);
+        }
+
+        // Refresh list database
+        await fetchAvailableDatabases();
+      } else {
+        alert(`Gagal menghapus database: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error deleting database:', error);
+      alert('Gagal menghapus database!');
+    }
+  };
+
+  // Filter tables berdasarkan view mode
   const visibleTables = viewMode === 'catalog'
     ? tablesData.filter(t => !hiddenTables.includes(t.name))
     : tablesData.filter(t => hiddenTables.includes(t.name));
-
-  console.log('Current viewMode:', viewMode);
-  console.log('Current hiddenTables:', hiddenTables);
-  console.log('Visible tables:', visibleTables.map(t => t.name));
 
   return (
     <div className="dashboard-container">
@@ -357,125 +497,347 @@ const KatalogData = ({ activeTabProp }) => {
 
               {/* Upload Section - Hanya untuk Admin */}
               {isAdmin() && (
-                <div className="upload-section">
-                  <h2>Unggah Data</h2>
-                  <div className="upload-container">
-                    <p style={{ marginBottom: '10px', fontWeight: '500' }}>
-                      Pilih Database untuk Upload:{' '}
-                      <button
-                        onClick={() => {
-                          document.getElementById('db-modal').style.display = 'block';
-                        }}
-                        style={{
-                          padding: '5px 15px',
-                          backgroundColor: '#2196F3',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Tampilkan Pilihan Database
-                      </button>
-                    </p>
-
-                    <div
-                      id="db-modal"
-                      style={{
-                        display: 'none',
-                        position: 'fixed',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        backgroundColor: 'rgba(0,0,0,0.5)',
-                        zIndex: 1000
-                      }}
-                      onClick={(e) => {
-                        if (e.target.id === 'db-modal') {
-                          e.target.style.display = 'none';
-                        }
-                      }}
-                    >
-                      <div
-                        style={{
-                          backgroundColor: 'white',
-                          padding: '20px',
-                          borderRadius: '8px',
-                          maxWidth: '500px',
-                          margin: '100px auto'
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <h3>Pilih Database untuk Upload</h3>
-                        {availableDatabases.map((db, index) => (
-                          <div key={index} style={{ marginBottom: '8px' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                              <input
-                                type="checkbox"
-                                checked={selectedDatabasesForUpload.includes(db.value)}
-                                onChange={() => handleDatabaseCheckbox(db.value)}
-                                style={{ marginRight: '8px' }}
-                              />
-                              <span>
-                                {db.name} ({db.host}:{db.port || 'default'})
-                              </span>
-                            </label>
-                          </div>
-                        ))}
+                <>
+                  <div className="upload-section">
+                    <h2>Unggah Data</h2>
+                    <div className="upload-container">
+                      <p style={{ marginBottom: '10px', fontWeight: '500' }}>
+                        Pilih Database untuk Upload:{' '}
                         <button
                           onClick={() => {
-                            document.getElementById('db-modal').style.display = 'none';
+                            document.getElementById('db-modal').style.display = 'block';
                           }}
                           style={{
-                            marginTop: '15px',
-                            padding: '8px 20px',
-                            backgroundColor: '#4CAF50',
+                            padding: '5px 15px',
+                            backgroundColor: '#2196F3',
                             color: 'white',
                             border: 'none',
                             borderRadius: '4px',
                             cursor: 'pointer'
                           }}
                         >
-                          Tutup
+                          Tampilkan Pilihan Database
                         </button>
+                      </p>
+
+                      <div
+                        id="db-modal"
+                        style={{
+                          display: 'none',
+                          position: 'fixed',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: 'rgba(0,0,0,0.5)',
+                          zIndex: 1000
+                        }}
+                        onClick={(e) => {
+                          if (e.target.id === 'db-modal') {
+                            e.target.style.display = 'none';
+                          }
+                        }}
+                      >
+                        <div
+                          style={{
+                            backgroundColor: 'white',
+                            padding: '20px',
+                            borderRadius: '8px',
+                            maxWidth: '500px',
+                            margin: '100px auto'
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <h3>Pilih Database untuk Upload</h3>
+                          {availableDatabases.map((db, index) => (
+                            <div key={index} style={{ marginBottom: '8px' }}>
+                              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedDatabasesForUpload.includes(db.value)}
+                                  onChange={() => handleDatabaseCheckbox(db.value)}
+                                  style={{ marginRight: '8px' }}
+                                />
+                                <span>
+                                  {db.name} ({db.host}:{db.port || 'default'})
+                                </span>
+                              </label>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => {
+                              document.getElementById('db-modal').style.display = 'none';
+                            }}
+                            style={{
+                              marginTop: '15px',
+                              padding: '8px 20px',
+                              backgroundColor: '#4CAF50',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Tutup
+                          </button>
+                        </div>
+                      </div>
+
+                      <input
+                        type="file"
+                        accept=".csv"
+                        onChange={handleFileChange}
+                        className="upload-input"
+                        disabled={isUploading}
+                      />
+
+                      {selectedFile && (
+                        <div style={{ marginTop: '15px' }}>
+                          <p style={{ fontWeight: '500', marginBottom: '10px' }}>
+                            File dipilih: <strong>{selectedFile.name}</strong>
+                          </p>
+
+                          <button
+                            onClick={handleUpload}
+                            disabled={isUploading || selectedDatabasesForUpload.length === 0}
+                            className="upload-button"
+                          >
+                            {isUploading ? 'Mengunggah...' : `Unggah ke ${selectedDatabasesForUpload.length} Database`}
+                          </button>
+                        </div>
+                      )}
+
+                      {uploadStatus && (
+                        <div
+                          className={uploadStatus.includes('Berhasil') ? 'save-success-message' : 'input-error-message'}
+                          style={{ marginTop: '10px' }}
+                        >
+                          {uploadStatus}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Kelola Koneksi Database Section - Hanya untuk Admin */}
+                  <div className="upload-section" style={{ marginTop: '30px' }}>
+                    <h2>Kelola Koneksi Database</h2>
+                    
+                    {/* Form Tambah Database */}
+                    <div className="upload-container" style={{ marginBottom: '20px' }}>
+                      <h3 style={{ marginBottom: '15px', fontSize: '1.1rem' }}>Tambah Database Baru</h3>
+                      
+                      <div style={{ display: 'grid', gap: '15px' }}>
+                        {/* Nama Database (Label) */}
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                            Nama Database (Label): <span style={{ color: 'red' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={dbForm.name}
+                            onChange={(e) => handleDbFormChange('name', e.target.value)}
+                            placeholder="Contoh: PostgreSQL Keuangan"
+                            style={{
+                              width: '100%',
+                              padding: '8px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </div>
+
+                        {/* Jenis Database */}
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                            Jenis Database: <span style={{ color: 'red' }}>*</span>
+                          </label>
+                          <select
+                            value={dbForm.type}
+                            onChange={(e) => handleDbFormChange('type', e.target.value)}
+                            style={{
+                              width: '100%',
+                              padding: '8px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          >
+                            <option value="postgresql">PostgreSQL (Port: 5432)</option>
+                            <option value="mysql">MySQL (Port: 3306)</option>
+                          </select>
+                        </div>
+
+                        {/* Nama Database */}
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                            Nama Database: <span style={{ color: 'red' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={dbForm.database}
+                            onChange={(e) => handleDbFormChange('database', e.target.value)}
+                            placeholder="Contoh: db_keuangan"
+                            style={{
+                              width: '100%',
+                              padding: '8px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </div>
+
+                        {/* Username */}
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                            Username: <span style={{ color: 'red' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={dbForm.user}
+                            onChange={(e) => handleDbFormChange('user', e.target.value)}
+                            placeholder="Contoh: admin"
+                            style={{
+                              width: '100%',
+                              padding: '8px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </div>
+
+                        {/* Password */}
+                        <div>
+                          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                            Password: <span style={{ color: 'red' }}>*</span>
+                          </label>
+                          <input
+                            type="password"
+                            value={dbForm.password}
+                            onChange={(e) => handleDbFormChange('password', e.target.value)}
+                            placeholder="Masukkan password database"
+                            style={{
+                              width: '100%',
+                              padding: '8px',
+                              borderRadius: '4px',
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        </div>
+
+                        {/* Info Host dan Port */}
+                        <div style={{
+                          padding: '10px',
+                          backgroundColor: '#e3f2fd',
+                          borderRadius: '4px',
+                          fontSize: '0.9rem'
+                        }}>
+                          <p style={{ margin: 0 }}>
+                            <strong>Host:</strong> localhost (tetap)
+                          </p>
+                          <p style={{ margin: '5px 0 0 0' }}>
+                            <strong>Port:</strong> {dbForm.type === 'postgresql' ? '5432' : '3306'} (otomatis)
+                          </p>
+                        </div>
+
+                        {/* Tombol Test dan Simpan */}
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <button
+                            onClick={handleTestConnection}
+                            disabled={isTestingConnection || !dbForm.type || !dbForm.database || !dbForm.user || !dbForm.password}
+                            style={{
+                              flex: 1,
+                              padding: '10px',
+                              backgroundColor: '#ff9800',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: isTestingConnection ? 'not-allowed' : 'pointer',
+                              opacity: isTestingConnection ? 0.6 : 1
+                            }}
+                          >
+                            {isTestingConnection ? 'Mengetes...' : 'Test Koneksi'}
+                          </button>
+
+                          <button
+                            onClick={handleSaveDatabase}
+                            disabled={isSavingDatabase || !dbForm.name || !dbForm.type || !dbForm.database || !dbForm.user || !dbForm.password}
+                            style={{
+                              flex: 1,
+                              padding: '10px',
+                              backgroundColor: '#4CAF50',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: isSavingDatabase ? 'not-allowed' : 'pointer',
+                              opacity: isSavingDatabase ? 0.6 : 1
+                            }}
+                          >
+                            {isSavingDatabase ? 'Menyimpan...' : 'Simpan Database'}
+                          </button>
+                        </div>
+
+                        {/* Status Message */}
+                        {dbFormStatus && (
+                          <div
+                            className={dbFormStatus.includes('✓') ? 'save-success-message' : 'input-error-message'}
+                          >
+                            {dbFormStatus}
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleFileChange}
-                      className="upload-input"
-                      disabled={isUploading}
-                    />
-
-                    {selectedFile && (
-                      <div style={{ marginTop: '15px' }}>
-                        <p style={{ fontWeight: '500', marginBottom: '10px' }}>
-                          File dipilih: <strong>{selectedFile.name}</strong>
-                        </p>
-
-                        <button
-                          onClick={handleUpload}
-                          disabled={isUploading || selectedDatabasesForUpload.length === 0}
-                          className="upload-button"
-                        >
-                          {isUploading ? 'Mengunggah...' : `Unggah ke ${selectedDatabasesForUpload.length} Database`}
-                        </button>
-                      </div>
-                    )}
-
-                    {uploadStatus && (
-                      <div
-                        className={uploadStatus.includes('Berhasil') ? 'save-success-message' : 'input-error-message'}
-                        style={{ marginTop: '10px' }}
-                      >
-                        {uploadStatus}
-                      </div>
-                    )}
+                    {/* List Database yang Tersedia */}
+                    <div className="upload-container">
+                      <h3 style={{ marginBottom: '15px', fontSize: '1.1rem' }}>Database yang Tersedia</h3>
+                      
+                      {availableDatabases.length === 0 ? (
+                        <p style={{ color: '#666', fontStyle: 'italic' }}>Belum ada database tersedia</p>
+                      ) : (
+                        <div className="data-table-container">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Nama</th>
+                                <th>Jenis</th>
+                                <th>Database</th>
+                                <th style={{ width: '100px', textAlign: 'center' }}>Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {availableDatabases.map((db, index) => (
+                                <tr key={index}>
+                                  <td>{db.name}</td>
+                                  <td>
+                                    <span style={{
+                                      padding: '4px 8px',
+                                      borderRadius: '4px',
+                                      backgroundColor: db.type === 'postgresql' ? '#e3f2fd' : '#fff3e0',
+                                      color: db.type === 'postgresql' ? '#1976d2' : '#f57c00',
+                                      fontSize: '0.85rem',
+                                      fontWeight: '500'
+                                    }}>
+                                      {db.type.toUpperCase()}
+                                    </span>
+                                  </td>
+                                  <td>{db.database}</td>
+                                  <td style={{ textAlign: 'center' }}>
+                                    <button
+                                      onClick={() => handleDeleteDatabase(db.value, db.name)}
+                                      className="delete-button"
+                                      style={{ fontSize: '0.85rem' }}
+                                    >
+                                      <i className="fas fa-trash"></i>
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                </>
               )}
 
               {/* Toggle View Mode */}
@@ -641,17 +1003,6 @@ const KatalogData = ({ activeTabProp }) => {
                               ))}
                             </tbody>
                           </table>
-                          <div style={{ 
-                            marginTop: '10px', 
-                            padding: '8px', 
-                            backgroundColor: '#f5f5f5',
-                            borderRadius: '4px',
-                            fontSize: '0.85rem',
-                            color: '#666',
-                            textAlign: 'center'
-                          }}>
-                            <i className="fas fa-info-circle"></i> Preview terbatas pada 10 baris pertama
-                          </div>
                         </div>
                       ) : (
                         <div className="no-data-message">Tidak ada data untuk preview</div>

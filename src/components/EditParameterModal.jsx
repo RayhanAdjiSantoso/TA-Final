@@ -8,19 +8,33 @@ const EditParameterModal = ({ isOpen, onClose, visualisasi, onSave }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Extract parameter dari query SQL
+  // Extract parameter dari query SQL dan load nilai default dari parameter_query
   useEffect(() => {
     if (isOpen && visualisasi && visualisasi.query_sql) {
       const paramPattern = /:(\w+)/g;
       const matches = [...visualisasi.query_sql.matchAll(paramPattern)];
       const uniqueParams = [...new Set(matches.map(m => m[1]))];
       
+      // Parse parameter_query untuk mendapatkan nilai default
+      let savedParams = {};
+      if (visualisasi.parameter_query) {
+        try {
+          savedParams = typeof visualisasi.parameter_query === 'string'
+            ? JSON.parse(visualisasi.parameter_query)
+            : visualisasi.parameter_query;
+          console.log('Loaded saved parameters:', savedParams);
+        } catch (e) {
+          console.error('Error parsing parameter_query:', e);
+        }
+      }
+      
       // Set parameter dengan nilai default dari query sebelumnya
       const initialParams = uniqueParams.map(paramName => ({
         name: paramName,
-        value: '' // Bisa diisi dengan nilai default dari database jika ada
+        value: savedParams[paramName] || '' // Gunakan nilai yang tersimpan atau kosong
       }));
       
+      console.log('Initial parameters:', initialParams);
       setParameters(initialParams);
     }
   }, [isOpen, visualisasi]);
@@ -49,11 +63,49 @@ const EditParameterModal = ({ isOpen, onClose, visualisasi, onSave }) => {
       // Buat object parameter untuk query
       const params = {};
       parameters.forEach(param => {
-        params[param.name] = param.value;
+        let value = String(param.value).trim();
+        
+        // Auto-convert format tanggal
+        if (/^\d{8}$/.test(value)) {
+          // YYYYMMDD -> YYYY-MM-DD
+          value = `${value.substring(0,4)}-${value.substring(4,6)}-${value.substring(6,8)}`;
+        } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+          // DD/MM/YYYY -> YYYY-MM-DD
+          const [day, month, year] = value.split('/');
+          value = `${year}-${month}-${day}`;
+        }
+        
+        params[param.name] = value;
       });
+
+      console.log('Executing query with params:', params);
 
       // Jalankan query dengan parameter baru
       const result = await executeQuery(visualisasi.query_sql, params);
+      
+      console.log('Query result:', result.length, 'rows');
+      
+      // Update parameter_query di database
+      try {
+        const updateResponse = await fetch(`http://localhost:5002/api/visualizations/${visualisasi.id_visualisasi}/parameters`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            parameter_query: JSON.stringify(params)
+          }),
+        });
+
+        if (!updateResponse.ok) {
+          console.error('Failed to update parameters in database');
+        } else {
+          console.log('Parameters successfully saved to database');
+        }
+      } catch (err) {
+        console.error('Error saving parameters:', err);
+        // Tidak throw error, tetap lanjutkan karena query sudah berhasil
+      }
       
       // Kirim hasil ke parent component
       onSave(result, params);
@@ -132,7 +184,7 @@ const EditParameterModal = ({ isOpen, onClose, visualisasi, onSave }) => {
                   type="text"
                   value={param.value}
                   onChange={(e) => handleParameterChange(index, e.target.value)}
-                  placeholder={`Masukkan nilai untuk ${param.name}`}
+                  placeholder={`Masukkan nilai untuk ${param.name} (format: YYYY-MM-DD)`}
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -141,6 +193,12 @@ const EditParameterModal = ({ isOpen, onClose, visualisasi, onSave }) => {
                     fontSize: '1rem'
                   }}
                 />
+                <div style={{
+                  fontSize: '0.85rem',
+                  color: '#666',
+                  marginTop: '0.25rem'
+                }}>
+                </div>
               </div>
             ))}
           </div>

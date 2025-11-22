@@ -68,7 +68,7 @@ const PDF = {
 
       pdf.setFontSize(12);
       pdf.setFont('helvetica', 'normal');
-      const splitRumusan = pdf.splitTextToSize(selectedAnalisis.masalah || '-', contentWidth);
+      const splitRumusan = pdf.splitTextToSize(selectedAnalisis.rumusan_masalah || '-', contentWidth);
       const rumusanHeight = splitRumusan.length * 7;
       
       // Cek apakah rumusan masalah muat

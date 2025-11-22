@@ -12,7 +12,7 @@ import {
 const KatalogVisualisasi = ({ activeTabProp }) => {
   const [activeTab, setActiveTab] = useState(activeTabProp || 'visualisasi');  
   const navigate = useNavigate();
-  const { isLoading, error, fetchData, executeQuery } = useData();
+  const { isLoading, error, executeQuery } = useData();
   const { user, isAdmin, isAnalis, isEndUser } = useAuth();
   
   // State untuk preview visualisasi
@@ -53,19 +53,22 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
       const response = await fetch('http://localhost:5002/api/databases');
       if (response.ok) {
         const databases = await response.json();
+        console.log('Available databases:', databases);
         setAvailableDatabases(databases);
         if (databases.length > 0) {
-          setSelectedDatabase(databases[0].value);
+          const firstDb = databases[0];
+          const dbValue = firstDb.value || `db_${firstDb.id_database}`;
+          setSelectedDatabase(dbValue);
+          console.log('Selected database:', dbValue);
         }
       }
     } catch (error) {
       console.error('Error fetching databases:', error);
       const defaultDatabases = [
-        { name: 'PostgreSQL Primary', value: 'postgresql_primary', host: 'localhost', port: 5432 },
-        { name: 'MySQL Secondary', value: 'mysql_secondary', host: 'localhost', port: 3306 }
+        { name: 'PostgreSQL Primary', value: 'db_1', host: 'localhost', port: 5432 }
       ];
       setAvailableDatabases(defaultDatabases);
-      setSelectedDatabase(defaultDatabases[0].value);
+      setSelectedDatabase('db_1');
     }
   };
 
@@ -73,17 +76,45 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
     fetchAvailableDatabases();
   }, []);
   
+  // Fungsi helper untuk konversi data ke number
+  const parseChartData = (data, xKey, yKey, chartType) => {
+    return data.map(item => {
+      const parsedItem = { ...item };
+      
+      if (yKey && parsedItem[yKey] !== undefined && parsedItem[yKey] !== null) {
+        const numValue = parseFloat(parsedItem[yKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[yKey] = numValue;
+        }
+      }
+      
+      // Hanya untuk scatter chart, konversi xKey ke number
+      if (chartType === 'scatter' && xKey && parsedItem[xKey] !== undefined && parsedItem[xKey] !== null) {
+        const numValue = parseFloat(parsedItem[xKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[xKey] = numValue;
+        }
+      }
+      
+      return parsedItem;
+    });
+  };
+  
   // Mengambil data visualisasi saat komponen dimuat atau database berubah
   useEffect(() => {
     const fetchVisualisasiData = async () => {
       try {
+        console.log('Fetching visualisasi for database:', selectedDatabase);
         const response = await fetch(`http://localhost:5002/api/database/${selectedDatabase}/visualisasi`);
         if (response.ok) {
           const visualisasi = await response.json();
+          console.log('Fetched visualisasi:', visualisasi);
           const sortedVisualisasi = [...visualisasi].sort((a, b) => {
             return new Date(b.created_at) - new Date(a.created_at);
           });
           setVisualisasiData(sortedVisualisasi);
+        } else {
+          console.error('Failed to fetch visualisasi:', response.status, response.statusText);
         }
       } catch (err) {
         console.error('Error fetching visualisasi data:', err);
@@ -110,8 +141,8 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
   // Fungsi untuk menyimpan hasil edit parameter dan update visualisasi
   const handleSaveParameterEdit = async (newChartData, params) => {
     try {
-      // Update chart_data di database
-      const response = await fetch(`http://localhost:5002/api/visualizations/${editingVisualisasi.id_visualisasi}`, {
+      // Update chart_data dan parameter_query di database
+      const chartDataResponse = await fetch(`http://localhost:5002/api/visualizations/${editingVisualisasi.id_visualisasi}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -121,23 +152,47 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
         }),
       });
 
-      if (response.ok) {
-        // Update visualisasi di state lokal
+      // Update parameter_query
+      const paramsResponse = await fetch(`http://localhost:5002/api/visualizations/${editingVisualisasi.id_visualisasi}/parameters`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          parameter_query: JSON.stringify(params)
+        }),
+      });
+
+      if (chartDataResponse.ok && paramsResponse.ok) {
+        // Update visualisasi di state lokal dengan chart_data dan parameter_query baru
         setVisualisasiData(prev => prev.map(vis => 
           vis.id_visualisasi === editingVisualisasi.id_visualisasi 
-            ? { ...vis, chart_data: JSON.stringify(newChartData) }
+            ? { 
+                ...vis, 
+                chart_data: JSON.stringify(newChartData),
+                parameter_query: JSON.stringify(params)
+              }
             : vis
         ));
 
         // Update preview jika sedang menampilkan visualisasi ini
         if (previewVisualisasi && previewVisualisasi.id_visualisasi === editingVisualisasi.id_visualisasi) {
-          setPreviewChartData(newChartData);
+          const parsedData = parseChartData(newChartData, previewParameters.xAxis, previewParameters.yAxis, editingVisualisasi.jenis_grafik);
+          setPreviewChartData(parsedData);
+          
+          // Update previewVisualisasi dengan parameter_query baru
+          setPreviewVisualisasi({
+            ...previewVisualisasi,
+            parameter_query: JSON.stringify(params)
+          });
         }
 
         setSaveSuccess(true);
         setTimeout(() => {
           setSaveSuccess(false);
         }, 3000);
+      } else {
+        throw new Error('Failed to update visualization');
       }
     } catch (error) {
       console.error('Error updating visualization:', error);
@@ -157,27 +212,43 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
       
       setPreviewVisualisasi(visualisasi);
       
+      // Set parameter dari visualisasi
+      const params = {
+        xAxis: visualisasi.parameter_x,
+        yAxis: visualisasi.parameter_y,
+        groupBy: visualisasi.group_by || ''
+      };
+      setPreviewParameters(params);
+      setPreviewChartType(visualisasi.jenis_grafik);
+      
+      console.log('Preview parameters:', params);
+      
       // Ambil data chart
       if (visualisasi.chart_data) {
-        const chartData = JSON.parse(visualisasi.chart_data);
-        setPreviewChartData(chartData);
+        try {
+          const chartData = typeof visualisasi.chart_data === 'string' 
+            ? JSON.parse(visualisasi.chart_data) 
+            : visualisasi.chart_data;
+          
+          console.log('Raw chart data:', chartData);
+          console.log('Sample data point:', chartData[0]);
+          
+          // Parse data untuk konversi string ke number
+          const parsedData = parseChartData(chartData, params.xAxis, params.yAxis, visualisasi.jenis_grafik);
+          console.log('Parsed chart data:', parsedData);
+          console.log('Sample parsed point:', parsedData[0]);
+          
+          setPreviewChartData(parsedData);
+        } catch (parseError) {
+          console.error('Error parsing chart data:', parseError);
+          setPreviewChartData([]);
+        }
       } else if (visualisasi.query_sql) {
         const result = await executeQuery(visualisasi.query_sql);
-        setPreviewChartData(result);
+        const parsedData = parseChartData(result, params.xAxis, params.yAxis, visualisasi.jenis_grafik);
+        setPreviewChartData(parsedData);
       }
       
-      // Ambil parameter visualisasi
-      const parameter = await fetchData('parameter_visualisasi');
-      const params = parameter.find(p => p.id_visualisasi === visualisasi.id_visualisasi);
-      
-      if (params) {
-        setPreviewParameters({
-          xAxis: params.parameter_x,
-          yAxis: params.parameter_y,
-          groupBy: params.parameter_group || ''
-        });
-        setPreviewChartType(visualisasi.jenis_grafik);
-      }
     } catch (error) {
       console.error('Error previewing visualization:', error);
     }
@@ -246,10 +317,18 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
   
   // Render grafik berdasarkan jenis
   const renderChart = (isPreview = false) => {
-    if (isPreview && previewVisualisasi) {
+    if (isPreview && previewVisualisasi && previewChartData.length > 0) {
       const dataKey = previewParameters.xAxis;
       const valueKey = previewParameters.yAxis;
       const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#8DD1E1'];
+      
+      console.log('Rendering chart:', {
+        type: previewChartType,
+        dataKey,
+        valueKey,
+        dataLength: previewChartData.length,
+        sampleData: previewChartData[0]
+      });
       
       return (
         <ResponsiveContainer width="100%" height={400}>
@@ -279,7 +358,15 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
                   { value: `Sumbu Y: ${valueKey}`, type: 'line', color: '#8884d8' }
                 ]}
               />
-              <Line type="monotone" dataKey={valueKey} stroke="#8884d8" name={valueKey} />
+              <Line 
+                type="monotone" 
+                dataKey={valueKey} 
+                stroke="#8884d8" 
+                name={valueKey}
+                strokeWidth={2}
+                dot={{ r: 3 }}
+                activeDot={{ r: 5 }}
+              />
             </LineChart>
           ) : previewChartType === 'pie' ? (
             <PieChart>
@@ -324,6 +411,8 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
         </ResponsiveContainer>
       );
     }
+    
+    return <div style={{ padding: '20px', textAlign: 'center' }}>Tidak ada data untuk ditampilkan</div>;
   };
 
   return (
@@ -368,6 +457,9 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
                     ))}
                   </select>
                 </div>
+                <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+                  Jumlah visualisasi: {visualisasiData.length}
+                </div>
               </div>
               
               {/* Katalog Visualisasi */}
@@ -375,69 +467,100 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
                 <h2>Katalog Visualisasi</h2>
                 {saveSuccess && (
                   <div className="save-success-message">
-                    Visualisasi berhasil dihapus!
+                    Operasi berhasil!
                   </div>
                 )}
-                <div className="data-table-container">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Judul</th>
-                        <th className="description-column">Deskripsi</th>
-                        <th>Jenis Grafik</th>
-                        <th>Tanggal Dibuat</th>
-                        <th>Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visualisasiData.map((item) => (
-                        <tr key={item.id_visualisasi}>
-                          <td>{item.judul}</td>
-                          <td>{item.deskripsi}</td>
-                          <td>{item.jenis_grafik}</td>
-                          <td>{formatDate(item.created_at)}</td>
-                          <td>
-                            <div className="action-buttons">
-                              <button 
-                                className={previewVisualisasi && previewVisualisasi.id_visualisasi === item.id_visualisasi ? "cancel-button" : "view-button"}
-                                onClick={() => handlePreviewVisualisasi(item)}
-                              >
-                                {previewVisualisasi && previewVisualisasi.id_visualisasi === item.id_visualisasi ? "Batal" : "Lihat"}
-                              </button>
-                              
-                              {/* Tombol Edit Parameter - Hanya untuk EndUser jika ada parameter */}
-                              {isEndUser() && item.query_sql && item.query_sql.includes(':') && (
-                                <button 
-                                  className="view-button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleEditParameter(item);
-                                  }}
-                                  style={{ backgroundColor: '#2196F3' }}
-                                >
-                                  Edit
-                                </button>
-                              )}
-                              
-                              {/* Tombol Hapus - Hanya untuk Admin dan Analis */}
-                              {(isAdmin() || isAnalis()) && (
-                                <button 
-                                  className="delete-button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteVisualisasi(item.id_visualisasi);
-                                  }}
-                                >
-                                  Hapus
-                                </button>
-                              )}
-                            </div>
-                          </td>
+                
+                {visualisasiData.length === 0 ? (
+                  <div style={{ 
+                    padding: '20px', 
+                    textAlign: 'center', 
+                    backgroundColor: '#f5f5f5', 
+                    borderRadius: '4px',
+                    margin: '20px 0'
+                  }}>
+                    <p>Tidak ada visualisasi yang tersedia untuk database ini.</p>
+                    {(isAdmin() || isAnalis()) && (
+                      <button 
+                        className="create-button" 
+                        style={{
+                          marginTop: '10px',
+                          padding: '10px 20px',
+                          backgroundColor: '#4CAF50',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '16px'
+                        }}
+                        onClick={handleCreateVisualisasi}
+                      >
+                        Buat Visualisasi Pertama
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="data-table-container">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Judul</th>
+                          <th className="description-column">Deskripsi</th>
+                          <th>Jenis Grafik</th>
+                          <th>Tanggal Dibuat</th>
+                          <th>Aksi</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {visualisasiData.map((item) => (
+                          <tr key={item.id_visualisasi}>
+                            <td>{item.judul}</td>
+                            <td>{item.deskripsi}</td>
+                            <td>{item.jenis_grafik}</td>
+                            <td>{formatDate(item.created_at)}</td>
+                            <td>
+                              <div className="action-buttons">
+                                <button 
+                                  className={previewVisualisasi && previewVisualisasi.id_visualisasi === item.id_visualisasi ? "cancel-button" : "view-button"}
+                                  onClick={() => handlePreviewVisualisasi(item)}
+                                >
+                                  {previewVisualisasi && previewVisualisasi.id_visualisasi === item.id_visualisasi ? "Tutup" : "Lihat"}
+                                </button>
+                                
+                                {/* Tombol Edit Parameter - Hanya untuk EndUser jika ada parameter */}
+                                {(isEndUser() || isAnalis()) && item.query_sql && item.query_sql.includes(':') && (
+                                  <button 
+                                    className="view-button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditParameter(item);
+                                    }}
+                                    style={{ backgroundColor: '#2196F3' }}
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                                
+                                {/* Tombol Hapus - Hanya untuk Admin dan Analis */}
+                                {(isAdmin() || isAnalis()) && (
+                                  <button 
+                                    className="delete-button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteVisualisasi(item.id_visualisasi);
+                                    }}
+                                  >
+                                    Hapus
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
                   
                 {/* Preview Visualisasi */}
                 {previewVisualisasi && (
@@ -459,7 +582,7 @@ const KatalogVisualisasi = ({ activeTabProp }) => {
                 )}
                   
                 {/* Tombol Buat Visualisasi - Hanya untuk Admin dan Analis */}
-                {(isAdmin() || isAnalis()) && (
+                {(isAdmin() || isAnalis()) && visualisasiData.length > 0 && (
                   <div className="button-container" style={{ marginTop: '20px', textAlign: 'center' }}>
                     <button 
                       className="create-button" 

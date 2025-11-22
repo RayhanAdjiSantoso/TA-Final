@@ -17,21 +17,21 @@ app.use(express.json());
 // Import auth routes
 const authRoutes = require('./routes/auth');
 
-// Konfigurasi koneksi PostgreSQL
-const pool = new Pool({
+// Konfigurasi koneksi PostgreSQL default (untuk sistem metadata)
+const systemPool = new Pool({
   user: process.env.DB_USER || 'rayhanadjisantoso',
   host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'TA',
+  database: process.env.DB_NAME || 'TA_FIN',
   password: process.env.DB_PASSWORD || 'rayhan123',
   port: process.env.DB_PORT || 5432,
 });
 
-// Verifikasi koneksi database
-pool.query('SELECT current_database()', (err, res) => {
+// Verifikasi koneksi database sistem
+systemPool.query('SELECT current_database()', (err, res) => {
   if (err) {
     console.error('Error checking database:', err);
   } else {
-    console.log('Connected to database:', res.rows[0].current_database);
+    console.log('Connected to system database:', res.rows[0].current_database);
   }
 });
 
@@ -44,28 +44,52 @@ const handleQueryError = (error, operation, res) => {
   res.status(500).json({ error: error.message });
 };
 
-// Endpoint untuk mendapatkan semua tabel
-app.get('/api/tables', async (req, res) => {
-  try {
-    const result = await pool.query(
-      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-    );
-    res.json(result.rows.map(row => row.table_name));
-  } catch (error) {
-    handleQueryError(error, 'fetching tables', res);
-  }
-});
+// Fungsi untuk membuat koneksi database berdasarkan konfigurasi
+const createDatabaseConnection = (dbConfig) => {
+  console.log('Creating connection for:', {
+    jenis: dbConfig.jenis,
+    host: dbConfig.host,
+    username: dbConfig.username,
+    database: dbConfig.nama_database,
+    hasPassword: !!dbConfig.password,
+    passwordLength: dbConfig.password ? dbConfig.password.length : 0
+  });
 
-// Endpoint untuk mendapatkan data dari tabel tertentu
-app.get('/api/data/:table', async (req, res) => {
-  const { table } = req.params;
-  try {
-    const result = await pool.query(`SELECT * FROM ${table} LIMIT 1000`);
-    res.json(result.rows);
-  } catch (error) {
-    handleQueryError(error, `fetching data from ${table}`, res);
+  if (dbConfig.jenis === 'mysql') {
+    const mysqlConfig = {
+      host: dbConfig.host || 'localhost',
+      port: dbConfig.port || 3306,
+      user: dbConfig.username,
+      password: dbConfig.password,
+      database: dbConfig.nama_database,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0
+    };
+    
+    console.log('MySQL config (password hidden):', {
+      ...mysqlConfig,
+      password: '***'
+    });
+    
+    return mysql.createPool(mysqlConfig);
+  } else {
+    const pgConfig = {
+      host: dbConfig.host || 'localhost',
+      port: dbConfig.port || 5432,
+      user: dbConfig.username,
+      password: dbConfig.password,
+      database: dbConfig.nama_database
+    };
+    
+    console.log('PostgreSQL config (password hidden):', {
+      ...pgConfig,
+      password: '***'
+    });
+    
+    return new Pool(pgConfig);
   }
-});
+};
 
 // Konfigurasi multer untuk upload file
 const storage = multer.diskStorage({
@@ -91,111 +115,426 @@ const upload = multer({
   }
 });
 
-// Endpoint untuk mendapatkan tabel dari database tertentu
-app.get('/api/database/:dbValue/tables', async (req, res) => {
-  const { dbValue } = req.params;
+// ==================== DATABASE MANAGEMENT ENDPOINTS ====================
+
+// Endpoint untuk mendapatkan ID visualisasi yang terkait dengan analisis tertentu
+app.get('/api/analisis/:id/visualisasi', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const checkResult = await systemPool.query(
+      'SELECT id_analisis FROM analisis WHERE id_analisis = $1',
+      [id]
+    );
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Analisis tidak ditemukan' });
+    }
+    
+    const result = await systemPool.query(
+      `SELECT id_visualisasi 
+       FROM analisis_visualisasi 
+       WHERE id_analisis = $1`,
+      [id]
+    );
+    
+    const visualisasiIds = result.rows.map(row => row.id_visualisasi);
+    res.json(visualisasiIds);
+  } catch (error) {
+    handleQueryError(error, `fetching visualisasi for analisis with id ${id}`, res);
+  }
+});
+
+// Endpoint untuk mendapatkan analisis dari database tertentu
+app.get('/api/database/:dbId/analisis', async (req, res) => {
+  const { dbId } = req.params;
   
   try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
+    const id = dbId.replace('db_', '');
     
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
+    const result = await systemPool.query(
+      `SELECT * FROM analisis 
+       WHERE penyimpanan_database = $1 OR penyimpanan_database = $2
+       ORDER BY created_at DESC`,
+      [id, dbId]
+    );
+    
+    res.json(result.rows);
+  } catch (error) {
+    handleQueryError(error, `fetching analisis from database ${dbId}`, res);
+  }
+});
+
+// Endpoint untuk mendapatkan analisis dengan detail visualisasi
+app.get('/api/database/:dbId/analisis-with-visualisasi', async (req, res) => {
+  const { dbId } = req.params;
+  
+  try {
+    const id = dbId.replace('db_', '');
+    
+    const result = await systemPool.query(`
+      SELECT 
+        a.*,
+        STRING_AGG(v.judul, ', ') as visualisasi_judul,
+        COUNT(DISTINCT av.id_visualisasi) as jumlah_visualisasi
+      FROM analisis a
+      LEFT JOIN analisis_visualisasi av ON a.id_analisis = av.id_analisis
+      LEFT JOIN visualisasi v ON av.id_visualisasi = v.id_visualisasi
+      WHERE a.penyimpanan_database = $1 OR a.penyimpanan_database = $2
+      GROUP BY a.id_analisis, a.judul, a.rumusan_masalah, a.interpretasi_hasil, a.penyimpanan_database, a.created_at
+      ORDER BY a.created_at DESC
+    `, [id, dbId]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    handleQueryError(error, `fetching analisis with visualisasi from database ${dbId}`, res);
+  }
+});
+
+// ==================== TABLE DATA ENDPOINTS ====================
+
+// Endpoint untuk mendapatkan jumlah baris dalam tabel
+app.get('/api/database/:dbId/table/:table/count', async (req, res) => {
+  const { dbId, table } = req.params;
+  
+  try {
+    const id = dbId.replace('db_', '');
+    
+    // Ambil informasi database
+    const dbResult = await systemPool.query(
+      'SELECT * FROM database_db WHERE id_database = $1',
+      [id]
+    );
+    
+    if (dbResult.rows.length === 0) {
       return res.status(404).json({ error: 'Database tidak ditemukan' });
     }
     
+    const dbConfig = dbResult.rows[0];
     const dbPool = createDatabaseConnection(dbConfig);
     
     try {
-      let result;
-      
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        result = await dbPool.query(
-          `SELECT table_name FROM information_schema.tables WHERE table_schema = ?`,
-          [dbConfig.database]
-        );
-        
-        const filteredTables = result[0]
-          .map(row => row.TABLE_NAME)
-          .filter(table => 
-            table !== 'visualisasi' && 
-            table !== 'parameter_visualisasi' && 
-            table !== 'analisis' && 
-            table !== 'analisis_visualisasi' && 
-            table !== 'metadata' && 
-            table !== 'kolom_definisi' &&
-            table !== 'users'
-          );
-        
-        res.json(filteredTables);
-      } else {
-        result = await dbPool.query(
-          "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-        );
-        
-        const filteredTables = result.rows
-          .map(row => row.table_name)
-          .filter(table => 
-            table !== 'visualisasi' && 
-            table !== 'parameter_visualisasi' && 
-            table !== 'analisis' && 
-            table !== 'analisis_visualisasi' && 
-            table !== 'metadata' && 
-            table !== 'kolom_definisi' &&
-            table !== 'users'
-          );
-        
-        res.json(filteredTables);
-      }
+      const result = await dbPool.query(`SELECT COUNT(*) as count FROM ${table}`);
+      const count = result.rows ? result.rows[0].count : result[0][0].count;
+      res.json({ count: parseInt(count) });
     } finally {
       await dbPool.end();
     }
   } catch (error) {
-    handleQueryError(error, `fetching tables from database ${dbValue}`, res);
+    handleQueryError(error, `counting rows in table ${table}`, res);
   }
 });
 
-// Endpoint untuk mendapatkan daftar database yang tersedia
+// Endpoint untuk mendapatkan data dari tabel tertentu di database tertentu
+app.get('/api/database/:dbId/data/:table', async (req, res) => {
+  const { dbId, table } = req.params;
+  const limit = parseInt(req.query.limit) || 10;
+  
+  try {
+    const id = dbId.replace('db_', '');
+    
+    // Ambil informasi database
+    const dbResult = await systemPool.query(
+      'SELECT * FROM database_db WHERE id_database = $1',
+      [id]
+    );
+    
+    if (dbResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Database tidak ditemukan' });
+    }
+    
+    const dbConfig = dbResult.rows[0];
+    const dbPool = createDatabaseConnection(dbConfig);
+    
+    try {
+      const query = `SELECT * FROM ${table} LIMIT ${limit}`;
+      const result = await dbPool.query(query);
+      const data = result.rows || result[0];
+      
+      res.json(data);
+    } finally {
+      await dbPool.end();
+    }
+  } catch (error) {
+    handleQueryError(error, `fetching data from table ${table} in database ${dbId}`, res);
+  }
+});
+
+// Endpoint untuk mendapatkan kolom dari tabel tertentu
+app.get('/api/database/:dbId/table/:table/columns', async (req, res) => {
+  const { dbId, table } = req.params;
+  
+  try {
+    const id = dbId.replace('db_', '');
+    
+    // Ambil id_tabel dari tabel_db
+    const tableResult = await systemPool.query(
+      `SELECT id_tabel FROM tabel_db 
+       WHERE id_database = $1 AND nama_tabel = $2`,
+      [id, table]
+    );
+    
+    if (tableResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tabel tidak ditemukan' });
+    }
+    
+    const tabelId = tableResult.rows[0].id_tabel;
+    
+    // Ambil kolom dari kolom_db
+    const columnsResult = await systemPool.query(
+      `SELECT nama_kolom, tipe_data 
+       FROM kolom_db 
+       WHERE id_tabel = $1 
+       ORDER BY id_kolom`,
+      [tabelId]
+    );
+    
+    res.json(columnsResult.rows);
+  } catch (error) {
+    handleQueryError(error, `fetching columns for table ${table}`, res);
+  }
+});
+
+// ==================== VALIDATION ENDPOINTS ====================
+
+// Endpoint untuk mengecek apakah tabel tersembunyi
+app.post('/api/validate-query-tables', async (req, res) => {
+  const { query, hiddenTables } = req.body;
+  
+  if (!hiddenTables || hiddenTables.length === 0) {
+    return res.json({ valid: true });
+  }
+  
+  try {
+    const queryLower = query.toLowerCase();
+    
+    const tablePatterns = [
+      /from\s+([a-z_][a-z0-9_]*)/gi,
+      /join\s+([a-z_][a-z0-9_]*)/gi,
+      /into\s+([a-z_][a-z0-9_]*)/gi,
+      /update\s+([a-z_][a-z0-9_]*)/gi,
+      /table\s+([a-z_][a-z0-9_]*)/gi
+    ];
+    
+    const tablesInQuery = new Set();
+    
+    for (const pattern of tablePatterns) {
+      let match;
+      while ((match = pattern.exec(queryLower)) !== null) {
+        const tableName = match[1].trim();
+        const sqlKeywords = ['select', 'where', 'group', 'order', 'having', 'limit', 'offset', 'inner', 'outer', 'left', 'right', 'cross'];
+        if (!sqlKeywords.includes(tableName)) {
+          tablesInQuery.add(tableName);
+        }
+      }
+    }
+    
+    const blockedTables = [];
+    for (const table of tablesInQuery) {
+      if (hiddenTables.includes(table)) {
+        blockedTables.push(table);
+      }
+    }
+    
+    if (blockedTables.length > 0) {
+      return res.json({
+        valid: false,
+        blockedTables: blockedTables,
+        message: `Query menggunakan tabel yang disembunyikan: ${blockedTables.join(', ')}`
+      });
+    }
+    
+    res.json({ valid: true });
+    
+  } catch (error) {
+    console.error('Error validating query:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== LEGACY ENDPOINTS (Untuk kompatibilitas) ====================
+
+// Endpoint untuk mendapatkan semua tabel (legacy - menggunakan system database)
+app.get('/api/tables', async (req, res) => {
+  try {
+    const result = await systemPool.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    );
+    res.json(result.rows.map(row => row.table_name));
+  } catch (error) {
+    handleQueryError(error, 'fetching tables', res);
+  }
+});
+
+// Endpoint untuk mendapatkan data dari tabel tertentu (legacy)
+app.get('/api/data/:table', async (req, res) => {
+  const { table } = req.params;
+  try {
+    const result = await systemPool.query(`SELECT * FROM ${table} LIMIT 1000`);
+    res.json(result.rows);
+  } catch (error) {
+    handleQueryError(error, `fetching data from ${table}`, res);
+  }
+});
+
+const PORT = process.env.PORT || 5002;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+}); 
+// untuk test koneksi database
+app.post('/api/database/test-connection', async (req, res) => {
+  const { type, database, user, password } = req.body;
+  
+  // Validasi input
+  if (!type || !database || !user || !password) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Semua field wajib diisi!' 
+    });
+  }
+  
+  const host = 'localhost';
+  const port = type === 'postgresql' ? 5432 : 3306;
+  
+  try {
+    if (type === 'mysql') {
+      const connection = await mysql.createConnection({
+        host: host,
+        port: port,
+        user: user,
+        password: password,
+        database: database
+      });
+      
+      await connection.query('SELECT 1');
+      await connection.end();
+      
+      res.json({ 
+        success: true, 
+        message: 'Koneksi berhasil!',
+        details: { type, host, port, database }
+      });
+    } else {
+      const testPool = new Pool({
+        host: host,
+        port: port,
+        user: user,
+        password: password,
+        database: database
+      });
+      
+      await testPool.query('SELECT 1');
+      await testPool.end();
+      
+      res.json({ 
+        success: true, 
+        message: 'Koneksi berhasil!',
+        details: { type, host, port, database }
+      });
+    }
+  } catch (error) {
+    console.error('Connection test error:', error);
+    res.json({ 
+      success: false, 
+      error: `Gagal terhubung: ${error.message}`
+    });
+  }
+});
+
+// Endpoint untuk menambah database baru
+app.post('/api/database/add', async (req, res) => {
+  const { name, type, database, user, password } = req.body;
+  
+  // Validasi input
+  if (!name || !type || !database || !user || !password) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Semua field wajib diisi!' 
+    });
+  }
+  
+  // Validasi tipe database
+  if (type !== 'postgresql' && type !== 'mysql') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Tipe database harus postgresql atau mysql!' 
+    });
+  }
+  
+  try {
+    // Cek apakah label sudah ada
+    const checkLabel = await systemPool.query(
+      'SELECT id_database FROM database_db WHERE label = $1',
+      [name]
+    );
+    
+    if (checkLabel.rows.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Nama database (label) sudah digunakan!' 
+      });
+    }
+    
+    // Simpan ke tabel database_db
+    const result = await systemPool.query(
+      `INSERT INTO database_db (nama_database, label, jenis, username, password, created_at) 
+       VALUES ($1, $2, $3, $4, $5, NOW()) 
+       RETURNING id_database, nama_database, label, jenis, username`,
+      [database, name, type, user, password]
+    );
+    
+    const newDatabase = result.rows[0];
+    
+    res.json({ 
+      success: true, 
+      message: 'Database berhasil ditambahkan!',
+      database: {
+        id_database: newDatabase.id_database,
+        nama_database: newDatabase.nama_database,
+        label: newDatabase.label,
+        jenis: newDatabase.jenis,
+        username: newDatabase.username,
+        host: 'localhost',
+        port: type === 'postgresql' ? 5432 : 3306
+      }
+    });
+  } catch (error) {
+    console.error('Error adding database:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Endpoint untuk mendapatkan daftar database
 app.get('/api/databases', async (req, res) => {
   try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
+    const result = await systemPool.query(
+      'SELECT id_database, nama_database, label, jenis, username, password, created_at FROM database_db ORDER BY created_at DESC'
+    );
+    
+    // Format response untuk kompatibilitas dengan frontend
+    const databases = result.rows.map(db => ({
+      id_database: db.id_database,
+      name: db.label,
+      value: `db_${db.id_database}`,
+      type: db.jenis,
+      host: 'localhost',
+      port: db.jenis === 'postgresql' ? 5432 : 3306,
+      database: db.nama_database,
+      user: db.username,
+      password: db.password,
+      nama_database: db.nama_database,
+      label: db.label,
+      jenis: db.jenis,
+      username: db.username
+    }));
+    
+    // Optional: Log untuk debug (password di-hide)
+    console.log('Databases loaded:', databases.map(db => ({
+      ...db,
+      password: db.password ? '***' : 'MISSING'
+    })));
     
     res.json(databases);
   } catch (error) {
@@ -203,29 +542,188 @@ app.get('/api/databases', async (req, res) => {
   }
 });
 
-// Fungsi untuk membuat koneksi database berdasarkan konfigurasi
-const createDatabaseConnection = (dbConfig) => {
-  if (dbConfig.value && dbConfig.value.includes('mysql')) {
-    return mysql.createPool({
-      user: dbConfig.user,
-      host: dbConfig.host,
-      database: dbConfig.database,
-      password: dbConfig.password,
-      port: dbConfig.port,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0
+// Endpoint untuk menghapus database
+app.delete('/api/database/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // Normalize ID - hapus prefix 'db_' jika ada
+    const dbId = id.replace('db_', '');
+    
+    // Cek apakah database ada
+    const checkDb = await systemPool.query(
+      'SELECT label FROM database_db WHERE id_database = $1',
+      [dbId]
+    );
+    
+    if (checkDb.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Database tidak ditemukan!' 
+      });
+    }
+    
+    const dbLabel = checkDb.rows[0].label;
+    
+    // Cek apakah database digunakan oleh visualisasi
+    const checkVisualisasi = await systemPool.query(
+      'SELECT COUNT(*) as count FROM visualisasi WHERE penyimpanan_database = $1 OR penyimpanan_database = $2',
+      [dbId, `db_${dbId}`]
+    );
+    
+    if (parseInt(checkVisualisasi.rows[0].count) > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Database tidak dapat dihapus karena masih digunakan oleh visualisasi!' 
+      });
+    }
+    
+    // Cek apakah database digunakan oleh analisis
+    const checkAnalisis = await systemPool.query(
+      'SELECT COUNT(*) as count FROM analisis WHERE penyimpanan_database = $1 OR penyimpanan_database = $2',
+      [dbId, `db_${dbId}`]
+    );
+    
+    if (parseInt(checkAnalisis.rows[0].count) > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Database tidak dapat dihapus karena masih digunakan oleh analisis!' 
+      });
+    }
+    
+    // Hapus kolom-kolom dari tabel yang terkait
+    await systemPool.query(
+      `DELETE FROM kolom_db 
+       WHERE id_tabel IN (
+         SELECT id_tabel FROM tabel_db WHERE id_database = $1
+       )`,
+      [dbId]
+    );
+    
+    // Hapus tabel-tabel terkait
+    await systemPool.query('DELETE FROM tabel_db WHERE id_database = $1', [dbId]);
+    
+    // Hapus database
+    await systemPool.query('DELETE FROM database_db WHERE id_database = $1', [dbId]);
+    
+    res.json({ 
+      success: true, 
+      message: `Database "${dbLabel}" berhasil dihapus!`
     });
-  } else {
-    return new Pool({
-      user: dbConfig.user,
-      host: dbConfig.host,
-      database: dbConfig.database,
-      password: dbConfig.password,
-      port: dbConfig.port,
+  } catch (error) {
+    console.error('Error deleting database:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
     });
   }
-};
+});
+
+// Endpoint untuk mendapatkan tabel dari database tertentu
+app.get('/api/database/:dbId/tables', async (req, res) => {
+  const { dbId } = req.params;
+  
+  try {
+    const id = dbId.replace('db_', '');
+    
+    // Ambil informasi database dari database_db
+    const dbResult = await systemPool.query(
+      'SELECT * FROM database_db WHERE id_database = $1',
+      [id]
+    );
+    
+    if (dbResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Database tidak ditemukan' });
+    }
+    
+    const dbConfig = dbResult.rows[0];
+    
+    // Buat koneksi ke database target untuk mendapatkan tabel yang sebenarnya ada
+    const dbPool = createDatabaseConnection(dbConfig);
+    
+    try {
+      let actualTables = [];
+      
+      if (dbConfig.jenis === 'mysql') {
+        const result = await dbPool.query('SHOW TABLES');
+        actualTables = result[0].map(row => Object.values(row)[0]);
+      } else {
+        const result = await dbPool.query(
+          `SELECT table_name 
+           FROM information_schema.tables 
+           WHERE table_schema = 'public' 
+           AND table_type = 'BASE TABLE'
+           ORDER BY table_name`
+        );
+        actualTables = result.rows.map(row => row.table_name);
+      }
+      
+      await dbPool.end();
+      
+      // Sinkronisasi dengan tabel_db - tambahkan tabel yang belum ada di metadata
+      for (const tableName of actualTables) {
+        const checkTable = await systemPool.query(
+          'SELECT id_tabel FROM tabel_db WHERE id_database = $1 AND nama_tabel = $2',
+          [id, tableName]
+        );
+        
+        if (checkTable.rows.length === 0) {
+          // Insert tabel baru ke metadata
+          const tableResult = await systemPool.query(
+            'INSERT INTO tabel_db (id_database, nama_tabel, created_at) VALUES ($1, $2, NOW()) RETURNING id_tabel',
+            [id, tableName]
+          );
+          
+          const tableId = tableResult.rows[0].id_tabel;
+          
+          // Ambil kolom dari tabel dan simpan ke kolom_db
+          let columns = [];
+          if (dbConfig.jenis === 'mysql') {
+            const tempPool = createDatabaseConnection(dbConfig);
+            const colResult = await tempPool.query(`DESCRIBE ${tableName}`);
+            columns = colResult[0].map(col => ({
+              name: col.Field,
+              type: col.Type
+            }));
+            await tempPool.end();
+          } else {
+            const tempPool = createDatabaseConnection(dbConfig);
+            const colResult = await tempPool.query(
+              `SELECT column_name, data_type 
+               FROM information_schema.columns 
+               WHERE table_name = $1 
+               ORDER BY ordinal_position`,
+              [tableName]
+            );
+            columns = colResult.rows.map(col => ({
+              name: col.column_name,
+              type: col.data_type
+            }));
+            await tempPool.end();
+          }
+          
+          // Simpan metadata kolom
+          for (const col of columns) {
+            await systemPool.query(
+              'INSERT INTO kolom_db (id_tabel, nama_kolom, tipe_data, created_at) VALUES ($1, $2, $3, NOW())',
+              [tableId, col.name, col.type]
+            );
+          }
+        }
+      }
+      
+      res.json(actualTables);
+      
+    } catch (error) {
+      await dbPool.end();
+      throw error;
+    }
+  } catch (error) {
+    handleQueryError(error, `fetching tables from database ${dbId}`, res);
+  }
+});
+
+// ==================== FILE UPLOAD ENDPOINTS ====================
 
 // Endpoint untuk upload file CSV
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -275,12 +773,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         try {
           const dbPool = createDatabaseConnection(dbConfig);
           
-          if (dbConfig.value.includes('mysql')) {
+          if (dbConfig.jenis === 'mysql') {
             await dbPool.query('SELECT 1');
             
+            // Buat tabel di database target
             const createTableQuery = `CREATE TABLE IF NOT EXISTS ${tableName} (${headers.map(h => `\`${h}\` TEXT`).join(', ')})`;
             await dbPool.query(createTableQuery);
       
+            // Insert data
             for (const record of records) {
               const values = headers.map(h => record[h]);
               const placeholders = headers.map(() => '?').join(', ');
@@ -292,9 +792,11 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
           } else {
             await dbPool.query('SELECT 1');
             
+            // Buat tabel di database target
             const createTableQuery = `CREATE TABLE IF NOT EXISTS ${tableName} (${headers.map(h => `"${h}" TEXT`).join(', ')})`;
             await dbPool.query(createTableQuery);
       
+            // Insert data
             for (const record of records) {
               const values = headers.map(h => record[h]);
               const insertQuery = `INSERT INTO ${tableName} (${headers.map(h => `"${h}"`).join(', ')}) VALUES (${headers.map((_, i) => `$${i + 1}`).join(', ')})`;
@@ -303,17 +805,42 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             
             await dbPool.end();
           }
+          
+          // Simpan metadata tabel ke tabel_db
+          const checkTable = await systemPool.query(
+            'SELECT id_tabel FROM tabel_db WHERE id_database = $1 AND nama_tabel = $2',
+            [dbConfig.id_database, tableName]
+          );
+          
+          let tableId;
+          
+          if (checkTable.rows.length === 0) {
+            // Insert tabel baru
+            const tableResult = await systemPool.query(
+              'INSERT INTO tabel_db (id_database, nama_tabel, created_at) VALUES ($1, $2, NOW()) RETURNING id_tabel',
+              [dbConfig.id_database, tableName]
+            );
+            tableId = tableResult.rows[0].id_tabel;
+            
+            // Simpan metadata kolom ke kolom_db
+            for (const header of headers) {
+              await systemPool.query(
+                'INSERT INTO kolom_db (id_tabel, nama_kolom, tipe_data, created_at) VALUES ($1, $2, $3, NOW())',
+                [tableId, header, 'TEXT']
+              );
+            }
+          }
       
           uploadResults.push({
-            database: dbConfig.name,
+            database: dbConfig.label,
             status: 'success',
             recordsInserted: records.length
           });
       
         } catch (error) {
-          console.error(`Error uploading to ${dbConfig.name}:`, error);
+          console.error(`Error uploading to ${dbConfig.label}:`, error);
           errors.push({
-            database: dbConfig.name,
+            database: dbConfig.label,
             error: error.message
           });
         }
@@ -347,37 +874,92 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// ==================== QUERY ENDPOINTS ====================
+
 // Endpoint untuk menjalankan query SQL kustom
 app.post('/api/query', async (req, res) => {
-  const { query, params } = req.body;
+  const { query, params, databaseId } = req.body;
   try {
+    // PENTING: Jika tidak ada databaseId, cari tabel dari query untuk auto-detect database
+    let targetDbId = databaseId;
+    if (!targetDbId) {
+      // Extract nama tabel dari query
+      const tableMatches = query.match(/FROM\s+([a-z_][a-z0-9_]*)/i);
+      if (tableMatches && tableMatches[1]) {
+        const tableName = tableMatches[1].toLowerCase();
+        // Cari tabel di database mana
+        const tableResult = await systemPool.query(
+          'SELECT id_database FROM tabel_db WHERE LOWER(nama_tabel) = $1 LIMIT 1',
+          [tableName]
+        );
+        if (tableResult.rows.length > 0) {
+          targetDbId = tableResult.rows[0].id_database;
+          console.log(`Auto-detected table "${tableName}" in database ID: ${targetDbId}`);
+        }
+      }
+    }
+
+    // Jika masih tidak ada targetDbId, gunakan systemPool
+    let dbPool = systemPool;
+    let shouldCloseConnection = false;
+    if (targetDbId) {
+      const dbResult = await systemPool.query(
+        'SELECT * FROM database_db WHERE id_database = $1',
+        [targetDbId]
+      );
+      if (dbResult.rows.length > 0) {
+        dbPool = createDatabaseConnection(dbResult.rows[0]);
+        shouldCloseConnection = true;
+        console.log(`Using database: ${dbResult.rows[0].label}`);
+      }
+    }
+
+    // Proses query dengan parameter
     if (params && Object.keys(params).length > 0) {
+      console.log('=== BACKEND RECEIVED PARAMS ===');
+      console.log('Raw params:', params);
+      console.log('Param types:', Object.entries(params).map(([key, val]) => 
+        `${key}: ${typeof val} = "${val}"`
+      ));
+      
       let modifiedQuery = query;
       const values = [];
       let paramIndex = 1;
-      
       const paramMap = {};
-      
+
+      // Temukan semua parameter unik
       const paramRegex = /:(\w+)\b/g;
       let match;
       while ((match = paramRegex.exec(query)) !== null) {
         const paramName = match[1];
         if (!paramMap[paramName] && params[paramName] !== undefined) {
           paramMap[paramName] = paramIndex++;
-          values.push(params[paramName]);
+          values.push(params[paramName]); // Langsung push tanpa konversi
         }
       }
-      
+
+      // Replace parameter dengan placeholder PostgreSQL ($1, $2, dst)
       for (const [paramName, index] of Object.entries(paramMap)) {
         const replaceRegex = new RegExp(`:${paramName}\\b`, 'g');
         modifiedQuery = modifiedQuery.replace(replaceRegex, `$${index}`);
       }
-      
-      const result = await pool.query(modifiedQuery, values);
-      res.json(result.rows);
+
+      console.log('Modified query:', modifiedQuery);
+      console.log('Values array:', values);
+      console.log('Values types:', values.map((val, idx) => 
+        `$${idx + 1}: ${typeof val} = "${val}"`
+      ));
+      console.log('================================');
+
+      const result = await dbPool.query(modifiedQuery, values);
+      const data = result.rows || result[0];
+      if (shouldCloseConnection) await dbPool.end();
+      res.json(data);
     } else {
-      const result = await pool.query(query);
-      res.json(result.rows);
+      const result = await dbPool.query(query);
+      const data = result.rows || result[0];
+      if (shouldCloseConnection) await dbPool.end();
+      res.json(data);
     }
   } catch (error) {
     console.error('Error executing query:', error);
@@ -385,9 +967,26 @@ app.post('/api/query', async (req, res) => {
   }
 });
 
+// ==================== HELPER FUNCTION ====================
+// Fungsi untuk memastikan format database konsisten (db_XX)
+function normalizeDbId(dbId) {
+  if (!dbId) return null;
+  
+  // Konversi ke string dulu
+  const dbIdStr = String(dbId);
+  
+  // Jika sudah ada prefix "db_", return as is
+  if (dbIdStr.startsWith('db_')) return dbIdStr;
+  
+  // Jika hanya angka, tambahkan prefix
+  return `db_${dbIdStr}`;
+}
+
+// ==================== VISUALIZATION ENDPOINTS ====================
+
 // Endpoint untuk menyimpan visualisasi
 app.post('/api/visualizations', async (req, res) => {
-  const { visualisasi, parameter } = req.body;
+  const { visualisasi, parameter, tabel_ids } = req.body;
   
   // Validasi input
   if (!visualisasi || !parameter) {
@@ -403,176 +1002,159 @@ app.post('/api/visualizations', async (req, res) => {
   }
   
   try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === visualisasi.database);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    // Pastikan chart_data dalam format string
     const chartDataString = typeof visualisasi.chart_data === 'string' 
       ? visualisasi.chart_data 
       : JSON.stringify(visualisasi.chart_data || []);
     
-    // Set default value untuk berparameter
-    const berparameter = visualisasi.berparameter !== undefined 
-      ? visualisasi.berparameter 
-      : false;
-    
-    // Sanitasi deskripsi (bisa null)
     const deskripsi = visualisasi.deskripsi || null;
+    const parameterQuery = visualisasi.parameter_query || null;
     
-    // Log untuk debugging
-    console.log('Saving visualization to:', dbConfig.name);
-    console.log('Data:', {
-      judul: visualisasi.judul,
-      jenis_grafik: visualisasi.jenis_grafik,
-      berparameter: berparameter,
-      chart_data_length: chartDataString.length,
-      parameter_x: parameter.parameter_x,
-      parameter_y: parameter.parameter_y,
-      parameter_group: parameter.parameter_group
-    });
+    // Normalize database ID format
+    const penyimpananDatabase = normalizeDbId(visualisasi.database);
     
-    const dbPool = createDatabaseConnection(dbConfig);
+    // Insert visualisasi
+    const result = await systemPool.query(
+      `INSERT INTO visualisasi (
+        judul, deskripsi, jenis_grafik, parameter_x, parameter_y, group_by,
+        query_sql, parameter_query, chart_data, penyimpanan_database, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) 
+      RETURNING id_visualisasi`,
+      [
+        visualisasi.judul,
+        deskripsi,
+        visualisasi.jenis_grafik,
+        parameter.parameter_x,
+        parameter.parameter_y,
+        parameter.parameter_group || null,
+        visualisasi.query_sql,
+        parameterQuery,
+        chartDataString,
+        penyimpananDatabase
+      ]
+    );
     
-    try {
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        // MySQL Transaction
-        await dbPool.query('START TRANSACTION');
-        
-        try {
-          const [visualizationResult] = await dbPool.query(
-            `INSERT INTO visualisasi (judul, deskripsi, jenis_grafik, query_sql, berparameter, chart_data, created_at) 
-             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-            [
-              visualisasi.judul, 
-              deskripsi, 
-              visualisasi.jenis_grafik, 
-              visualisasi.query_sql, 
-              berparameter, 
-              chartDataString
-            ]
-          );
-          
-          const visualizationId = visualizationResult.insertId;
-          
-          console.log('Visualization inserted with ID:', visualizationId);
-          
-          await dbPool.query(
-            `INSERT INTO parameter_visualisasi (id_visualisasi, parameter_x, parameter_y, group_by, created_at) 
-             VALUES (?, ?, ?, ?, NOW())`,
-            [
-              visualizationId, 
-              parameter.parameter_x, 
-              parameter.parameter_y, 
-              parameter.parameter_group || null
-            ]
-          );
-          
-          await dbPool.query('COMMIT');
-          
-          console.log('Transaction committed successfully');
-          
-        } catch (error) {
-          await dbPool.query('ROLLBACK');
-          console.error('MySQL transaction error, rolled back:', error);
-          throw error;
-        }
-        
-      } else {
-        // PostgreSQL Transaction
-        await dbPool.query('BEGIN');
-        
-        try {
-          const visualizationResult = await dbPool.query(
-            `INSERT INTO visualisasi (judul, deskripsi, jenis_grafik, query_sql, berparameter, chart_data, created_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id_visualisasi`,
-            [
-              visualisasi.judul, 
-              deskripsi, 
-              visualisasi.jenis_grafik, 
-              visualisasi.query_sql, 
-              berparameter, 
-              chartDataString
-            ]
-          );
-          
-          const visualizationId = visualizationResult.rows[0].id_visualisasi;
-          
-          console.log('Visualization inserted with ID:', visualizationId);
-          
-          await dbPool.query(
-            `INSERT INTO parameter_visualisasi (id_visualisasi, parameter_x, parameter_y, group_by, created_at) 
-             VALUES ($1, $2, $3, $4, NOW())`,
-            [
-              visualizationId, 
-              parameter.parameter_x, 
-              parameter.parameter_y, 
-              parameter.parameter_group || null
-            ]
-          );
-          
-          await dbPool.query('COMMIT');
-          
-          console.log('Transaction committed successfully');
-          
-        } catch (error) {
-          await dbPool.query('ROLLBACK');
-          console.error('PostgreSQL transaction error, rolled back:', error);
-          throw error;
-        }
+    const visualizationId = result.rows[0].id_visualisasi;
+    
+    // Insert relasi tabel_visualisasi jika ada tabel_ids
+    if (tabel_ids && tabel_ids.length > 0) {
+      for (const tabelId of tabel_ids) {
+        await systemPool.query(
+          'INSERT INTO tabel_visualisasi (id_tabel, id_visualisasi, created_at) VALUES ($1, $2, NOW())',
+          [tabelId, visualizationId]
+        );
       }
-      
-      res.status(201).json({ 
-        success: true, 
-        message: 'Visualisasi berhasil disimpan' 
-      });
-      
-    } finally {
-      await dbPool.end();
     }
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Visualisasi berhasil disimpan',
+      id_visualisasi: visualizationId
+    });
     
   } catch (error) {
     console.error('Error saving visualization:', error);
-    console.error('Error stack:', error.stack);
-    
-    // Kirim response error yang lebih detail
     res.status(500).json({ 
       error: 'Gagal menyimpan visualisasi',
-      message: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
+  }
+});
+
+// Endpoint untuk mendapatkan semua visualisasi
+app.get('/api/visualizations', async (req, res) => {
+  try {
+    const result = await systemPool.query(
+      `SELECT * FROM visualisasi ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    handleQueryError(error, 'fetching visualizations', res);
+  }
+});
+
+// Endpoint untuk mendapatkan visualisasi berdasarkan ID
+app.get('/api/visualizations/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await systemPool.query(
+      'SELECT * FROM visualisasi WHERE id_visualisasi = $1',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    handleQueryError(error, `fetching visualization with id ${id}`, res);
+  }
+});
+
+// Endpoint untuk update visualisasi (chart_data)
+app.put('/api/visualizations/:id', async (req, res) => {
+  const { id } = req.params;
+  const { chart_data } = req.body;
+  
+  try {
+    const result = await systemPool.query(
+      `UPDATE visualisasi 
+       SET chart_data = $1
+       WHERE id_visualisasi = $2
+       RETURNING *`,
+      [chart_data, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
+    }
+    
+    res.json({ success: true, message: 'Visualisasi berhasil diupdate', data: result.rows[0] });
+  } catch (error) {
+    handleQueryError(error, 'updating visualization', res);
+  }
+});
+
+// Endpoint baru untuk update parameter_query saja
+app.put('/api/visualizations/:id/parameters', async (req, res) => {
+  const { id } = req.params;
+  const { parameter_query } = req.body;
+  
+  try {
+    console.log('Updating parameter_query for visualization:', id);
+    console.log('New parameter_query:', parameter_query);
+    
+    const result = await systemPool.query(
+      `UPDATE visualisasi 
+       SET parameter_query = $1
+       WHERE id_visualisasi = $2
+       RETURNING *`,
+      [parameter_query, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
+    }
+    
+    console.log('Parameter_query updated successfully');
+    res.json({ 
+      success: true, 
+      message: 'Parameter query berhasil diupdate', 
+      data: result.rows[0] 
+    });
+  } catch (error) {
+    console.error('Error updating parameter_query:', error);
+    handleQueryError(error, 'updating parameter query', res);
   }
 });
 
 // Endpoint untuk menghapus visualisasi
 app.delete('/api/visualizations/:id', async (req, res) => {
   const { id } = req.params;
-  const client = await pool.connect();
   
   try {
-    const checkResult = await client.query(
+    // Cek apakah visualisasi ada
+    const checkResult = await systemPool.query(
       'SELECT id_visualisasi FROM visualisasi WHERE id_visualisasi = $1',
       [id]
     );
@@ -581,157 +1163,120 @@ app.delete('/api/visualizations/:id', async (req, res) => {
       return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
     }
 
-    const usageCheck = await client.query(
+    // Cek apakah visualisasi digunakan oleh analisis
+    const usageCheck = await systemPool.query(
       'SELECT COUNT(*) as count FROM analisis_visualisasi WHERE id_visualisasi = $1',
       [id]
     );
     
     if (usageCheck.rows[0].count > 0) {
       return res.status(403).json({ 
-        error: 'Visualisasi tidak dapat dihapus karena sedang digunakan dalam katalog analisis',
+        error: 'Visualisasi tidak dapat dihapus karena sedang digunakan dalam analisis',
         usage_count: usageCheck.rows[0].count
       });
     }
 
-    await client.query('BEGIN');
-
-    await client.query(
-      'DELETE FROM parameter_visualisasi WHERE id_visualisasi = $1',
+    // Hapus relasi tabel_visualisasi
+    await systemPool.query(
+      'DELETE FROM tabel_visualisasi WHERE id_visualisasi = $1',
       [id]
     );
 
-    const deleteResult = await client.query(
+    // Hapus visualisasi
+    await systemPool.query(
       'DELETE FROM visualisasi WHERE id_visualisasi = $1',
       [id]
     );
 
-    if (deleteResult.rowCount === 0) {
-      throw new Error('Tidak ada data yang dihapus');
-    }
-
-    await client.query('COMMIT');
     res.json({ success: true, message: 'Visualisasi berhasil dihapus' });
     
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error('Delete error:', error);
     res.status(500).json({ 
       error: 'Gagal menghapus visualisasi', 
       details: error.message 
     });
-  } finally {
-    client.release();
   }
 });
 
+// Endpoint untuk mendapatkan visualisasi dari database tertentu
+app.get('/api/database/:dbId/visualisasi', async (req, res) => {
+  const { dbId } = req.params;
+  
+  try {
+    console.log('Requested dbId:', dbId);
+    
+    // Normalize database ID
+    const normalizedDbId = normalizeDbId(dbId);
+    console.log('Normalized dbId:', normalizedDbId);
+    
+    // Query dengan normalized ID
+    const result = await systemPool.query(
+      `SELECT * FROM visualisasi 
+       WHERE penyimpanan_database = $1
+       ORDER BY created_at DESC`,
+      [normalizedDbId]
+    );
+    
+    console.log('Found visualisasi:', result.rows.length);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching visualisasi:', error);
+    handleQueryError(error, `fetching visualisasi from database ${dbId}`, res);
+  }
+});
+
+// ==================== ANALYSIS ENDPOINTS ====================
+
 // Endpoint untuk menyimpan analisis
 app.post('/api/analisis', async (req, res) => {
-  const { judul, masalah, interpretasi_hasil, visualisasi_ids, database, created_by } = req.body;
+  const { judul, masalah, interpretasi_hasil, visualisasi_ids, database } = req.body;
   
   if (!judul || !visualisasi_ids || !visualisasi_ids.length) {
     return res.status(400).json({ error: 'Judul dan visualisasi wajib diisi' });
   }
   
   try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
+    // Normalize database ID format
+    const penyimpananDatabase = normalizeDbId(database);
     
-    const dbConfig = databases.find(db => db.value === database);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
+    // Insert analisis
+    const result = await systemPool.query(
+      `INSERT INTO analisis (judul, rumusan_masalah, interpretasi_hasil, penyimpanan_database, created_at) 
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING id_analisis`,
+      [judul, masalah || null, interpretasi_hasil || null, penyimpananDatabase]
+    );
+    
+    const analisisId = result.rows[0].id_analisis;
+    
+    // Insert relasi analisis_visualisasi
+    for (const visId of visualisasi_ids) {
+      await systemPool.query(
+        'INSERT INTO analisis_visualisasi (id_analisis, id_visualisasi, created_at) VALUES ($1, $2, NOW())',
+        [analisisId, visId]
+      );
     }
     
-    const dbPool = createDatabaseConnection(dbConfig);
+    res.status(201).json({ 
+      success: true, 
+      message: 'Analisis berhasil disimpan',
+      id_analisis: analisisId
+    });
     
-    try {
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        await dbPool.query('BEGIN');
-        
-        const [analisisResult] = await dbPool.query(
-          `INSERT INTO analisis (judul, masalah, interpretasi_hasil, created_at) 
-           VALUES (?, ?, ?, NOW())`,
-          [judul, masalah || null, interpretasi_hasil || null]
-        );
-        
-        const analisisId = analisisResult.insertId;
-        
-        for (const visId of visualisasi_ids) {
-          await dbPool.query(
-            `INSERT INTO analisis_visualisasi (id_analisis, id_visualisasi, created_at) 
-             VALUES (?, ?, NOW())`,
-            [analisisId, visId]
-          );
-        }
-        
-        await dbPool.query('COMMIT');
-      } else {
-        await dbPool.query('BEGIN');
-        
-        const analisisResult = await dbPool.query(
-          `INSERT INTO analisis (judul, masalah, interpretasi_hasil, created_at) 
-           VALUES ($1, $2, $3, NOW()) RETURNING id_analisis`,
-          [judul, masalah || null, interpretasi_hasil || null]
-        );
-        
-        const analisisId = analisisResult.rows[0].id_analisis;
-        
-        for (const visId of visualisasi_ids) {
-          await dbPool.query(
-            `INSERT INTO analisis_visualisasi (id_analisis, id_visualisasi, created_at) 
-             VALUES ($1, $2, NOW())`,
-            [analisisId, visId]
-          );
-        }
-        
-        await dbPool.query('COMMIT');
-      }
-      
-      res.status(201).json({ 
-        success: true, 
-        message: 'Analisis berhasil disimpan'
-      });
-    } catch (error) {
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        await dbPool.query('ROLLBACK');
-      } else {
-        await dbPool.query('ROLLBACK');
-      }
-      throw error;
-    } finally {
-      await dbPool.end();
-    }
   } catch (error) {
     handleQueryError(error, 'saving analisis', res);
   }
 });
 
-// Endpoint untuk update analisis (untuk EndUser)
+// Endpoint untuk update analisis
 app.put('/api/analisis/:id', async (req, res) => {
   const { id } = req.params;
   const { judul, masalah, interpretasi_hasil } = req.body;
   
   try {
-    const result = await pool.query(
+    const result = await systemPool.query(
       `UPDATE analisis 
-       SET judul = $1, masalah = $2, interpretasi_hasil = $3
+       SET judul = $1, rumusan_masalah = $2, interpretasi_hasil = $3
        WHERE id_analisis = $4
        RETURNING *`,
       [judul, masalah, interpretasi_hasil, id]
@@ -752,7 +1297,7 @@ app.delete('/api/analisis/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const checkResult = await pool.query(
+    const checkResult = await systemPool.query(
       'SELECT id_analisis FROM analisis WHERE id_analisis = $1',
       [id]
     );
@@ -761,7 +1306,14 @@ app.delete('/api/analisis/:id', async (req, res) => {
       return res.status(404).json({ error: 'Analisis tidak ditemukan' });
     }
     
-    await pool.query(
+    // Hapus relasi analisis_visualisasi
+    await systemPool.query(
+      'DELETE FROM analisis_visualisasi WHERE id_analisis = $1',
+      [id]
+    );
+    
+    // Hapus analisis
+    await systemPool.query(
       'DELETE FROM analisis WHERE id_analisis = $1',
       [id]
     );
@@ -772,81 +1324,53 @@ app.delete('/api/analisis/:id', async (req, res) => {
   }
 });
 
-// Endpoint untuk mendapatkan semua visualisasi
-app.get('/api/visualizations', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT v.*, p.parameter_x, p.parameter_y, p.group_by 
-       FROM visualisasi v 
-       LEFT JOIN parameter_visualisasi p ON v.id_visualisasi = p.id_visualisasi 
-       ORDER BY v.created_at DESC`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    handleQueryError(error, 'fetching visualizations', res);
-  }
-});
-
-// Endpoint untuk mendapatkan visualisasi berdasarkan ID
-app.get('/api/visualizations/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const result = await pool.query(
-      `SELECT v.*, p.parameter_x, p.parameter_y, p.group_by, p.id_parameter 
-       FROM visualisasi v 
-       LEFT JOIN parameter_visualisasi p ON v.id_visualisasi = p.id_visualisasi 
-       WHERE v.id_visualisasi = $1`,
-      [id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
-    }
-    
-    res.json(result.rows[0]);
-  } catch (error) {
-    handleQueryError(error, `fetching visualization with id ${id}`, res);
-  }
-});
-
-// Endpoint untuk update visualisasi (chart_data) - untuk EndUser edit parameter
-app.put('/api/visualizations/:id', async (req, res) => {
-  const { id } = req.params;
-  const { chart_data } = req.body;
+// Endpoint untuk mendapatkan analisis dari database tertentu dengan visualisasi
+app.get('/api/database/:dbId/analisis-with-visualisasi', async (req, res) => {
+  const { dbId } = req.params;
   
   try {
-    const result = await pool.query(
-      `UPDATE visualisasi 
-       SET chart_data = $1
-       WHERE id_visualisasi = $2
-       RETURNING *`,
-      [chart_data, id]
+    console.log('Fetching analisis for database:', dbId);
+    
+    // Normalize database ID
+    const normalizedDbId = normalizeDbId(dbId);
+    console.log('Normalized dbId:', normalizedDbId);
+    
+    const result = await systemPool.query(
+      `SELECT 
+        a.id_analisis,
+        a.judul,
+        a.rumusan_masalah,
+        a.interpretasi_hasil,
+        a.penyimpanan_database,
+        a.created_at,
+        STRING_AGG(DISTINCT v.judul, ', ') as visualisasi_judul,
+        COUNT(DISTINCT av.id_visualisasi) as jumlah_visualisasi
+      FROM analisis a
+      LEFT JOIN analisis_visualisasi av ON a.id_analisis = av.id_analisis
+      LEFT JOIN visualisasi v ON av.id_visualisasi = v.id_visualisasi
+      WHERE a.penyimpanan_database = $1
+      GROUP BY a.id_analisis, a.judul, a.rumusan_masalah, a.interpretasi_hasil, 
+               a.penyimpanan_database, a.created_at
+      ORDER BY a.created_at DESC`,
+      [normalizedDbId]
     );
     
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Visualisasi tidak ditemukan' });
-    }
-    
-    res.json({ success: true, message: 'Visualisasi berhasil diupdate', data: result.rows[0] });
+    console.log('Found analisis:', result.rows.length);
+    res.json(result.rows);
   } catch (error) {
-    handleQueryError(error, 'updating visualization', res);
+    console.error('Error fetching analisis with visualisasi:', error);
+    handleQueryError(error, `fetching analisis from database ${dbId}`, res);
   }
 });
 
-// Endpoint untuk mendapatkan ID visualisasi yang terkait dengan analisis tertentu
+// Endpoint untuk mendapatkan visualisasi IDs dari analisis tertentu
 app.get('/api/analisis/:id/visualisasi', async (req, res) => {
   const { id } = req.params;
+  
   try {
-    const checkResult = await pool.query(
-      'SELECT id_analisis FROM analisis WHERE id_analisis = $1',
-      [id]
-    );
+    console.log('Fetching visualisasi IDs for analisis:', id);
     
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Analisis tidak ditemukan' });
-    }
-    
-    const result = await pool.query(
+    const result = await systemPool.query(
       `SELECT id_visualisasi 
        FROM analisis_visualisasi 
        WHERE id_analisis = $1`,
@@ -854,412 +1378,11 @@ app.get('/api/analisis/:id/visualisasi', async (req, res) => {
     );
     
     const visualisasiIds = result.rows.map(row => row.id_visualisasi);
+    console.log('Found visualisasi IDs:', visualisasiIds);
+    
     res.json(visualisasiIds);
   } catch (error) {
-    handleQueryError(error, `fetching visualisasi for analisis with id ${id}`, res);
+    console.error('Error fetching visualisasi IDs:', error);
+    handleQueryError(error, `fetching visualisasi for analisis ${id}`, res);
   }
-});
-
-// Endpoint untuk mendapatkan visualisasi dari database tertentu
-app.get('/api/database/:dbValue/visualisasi', async (req, res) => {
-  const { dbValue } = req.params;
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      let result;
-      
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        result = await dbPool.query(
-          `SELECT * FROM visualisasi ORDER BY created_at DESC`
-        );
-        res.json(result[0]);
-      } else {
-        result = await dbPool.query(
-          `SELECT * FROM visualisasi ORDER BY created_at DESC`
-        );
-        res.json(result.rows);
-      }
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `fetching visualisasi from database ${dbValue}`, res);
-  }
-});
-
-// Endpoint untuk mendapatkan parameter visualisasi dari database tertentu
-app.get('/api/database/:dbValue/parameter_visualisasi', async (req, res) => {
-  const { dbValue } = req.params;
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      let result;
-      
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        result = await dbPool.query(
-          `SELECT * FROM parameter_visualisasi`
-        );
-        res.json(result[0]);
-      } else {
-        result = await dbPool.query(
-          `SELECT * FROM parameter_visualisasi`
-        );
-        res.json(result.rows);
-      }
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `fetching parameter_visualisasi from database ${dbValue}`, res);
-  }
-});
-
-// Endpoint untuk mendapatkan analisis dari database tertentu
-app.get('/api/database/:dbValue/analisis', async (req, res) => {
-  const { dbValue } = req.params;
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      let result;
-      
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        result = await dbPool.query(
-          `SELECT * FROM analisis ORDER BY created_at DESC`
-        );
-        res.json(result[0]);
-      } else {
-        result = await dbPool.query(
-          `SELECT * FROM analisis ORDER BY created_at DESC`
-        );
-        res.json(result.rows);
-      }
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `fetching analisis from database ${dbValue}`, res);
-  }
-});
-
-// Endpoint untuk mendapatkan jumlah baris dalam tabel
-app.get('/api/database/:dbValue/table/:table/count', async (req, res) => {
-  const { dbValue, table } = req.params;
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      const result = await dbPool.query(`SELECT COUNT(*) as count FROM ${table}`);
-      const count = dbConfig.value.includes('mysql') ? result[0][0].count : result.rows[0].count;
-      res.json({ count: parseInt(count) });
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `counting rows in table ${table}`, res);
-  }
-});
-
-// Endpoint untuk mendapatkan analisis dengan detail visualisasi dari database tertentu
-app.get('/api/database/:dbValue/analisis-with-visualisasi', async (req, res) => {
-  const { dbValue } = req.params;
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      let result;
-      
-      if (dbConfig.value && dbConfig.value.includes('mysql')) {
-        // Query untuk MySQL
-        result = await dbPool.query(`
-          SELECT 
-            a.*,
-            GROUP_CONCAT(v.judul SEPARATOR ', ') as visualisasi_judul,
-            COUNT(DISTINCT av.id_visualisasi) as jumlah_visualisasi
-          FROM analisis a
-          LEFT JOIN analisis_visualisasi av ON a.id_analisis = av.id_analisis
-          LEFT JOIN visualisasi v ON av.id_visualisasi = v.id_visualisasi
-          GROUP BY a.id_analisis
-          ORDER BY a.created_at DESC
-        `);
-        res.json(result[0]);
-      } else {
-        // Query untuk PostgreSQL
-        result = await dbPool.query(`
-          SELECT 
-            a.*,
-            STRING_AGG(v.judul, ', ') as visualisasi_judul,
-            COUNT(DISTINCT av.id_visualisasi) as jumlah_visualisasi
-          FROM analisis a
-          LEFT JOIN analisis_visualisasi av ON a.id_analisis = av.id_analisis
-          LEFT JOIN visualisasi v ON av.id_visualisasi = v.id_visualisasi
-          GROUP BY a.id_analisis, a.judul, a.masalah, a.interpretasi_hasil, a.created_at
-          ORDER BY a.created_at DESC
-        `);
-        res.json(result.rows);
-      }
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `fetching analisis with visualisasi from database ${dbValue}`, res);
-  }
-});
-
-// Endpoint untuk mendapatkan data dari tabel tertentu di database tertentu
-app.get('/api/database/:dbValue/data/:table', async (req, res) => {
-  const { dbValue, table } = req.params;
-  const limit = parseInt(req.query.limit) || 10; // Default 10, parse as integer
-  
-  try {
-    const databases = [
-      {
-        name: 'PostgreSQL Primary',
-        value: 'postgresql_primary',
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
-        database: process.env.DB_NAME || 'TA',
-        user: process.env.DB_USER || 'rayhanadjisantoso',
-        password: process.env.DB_PASSWORD || 'rayhan123'
-      },
-      {
-        name: 'MySQL Secondary',
-        value: 'mysql_secondary',
-        host: process.env.DB_HOST_2 || 'localhost',
-        port: process.env.DB_PORT_2 || 3306,
-        database: process.env.DB_NAME_2 || 'ta_fin',
-        user: process.env.DB_USER_2 || 'root',
-        password: process.env.DB_PASSWORD_2 || 'rayhan2510'
-      }
-    ];
-    
-    const dbConfig = databases.find(db => db.value === dbValue);
-    if (!dbConfig) {
-      return res.status(404).json({ error: 'Database tidak ditemukan' });
-    }
-    
-    const dbPool = createDatabaseConnection(dbConfig);
-    
-    try {
-      // PERBAIKAN: Gunakan string concatenation yang aman untuk query
-      const query = `SELECT * FROM ${table} LIMIT ${limit}`;
-      console.log('Executing query:', query); // Debug log
-      
-      const result = await dbPool.query(query);
-      const data = dbConfig.value.includes('mysql') ? result[0] : result.rows;
-      
-      console.log(`Returned ${data.length} rows from ${table}`); // Debug log
-      res.json(data);
-    } finally {
-      await dbPool.end();
-    }
-  } catch (error) {
-    handleQueryError(error, `fetching data from table ${table} in database ${dbValue}`, res);
-  }
-});
-
-// Endpoint untuk mengecek apakah tabel tersembunyi
-app.post('/api/validate-query-tables', async (req, res) => {
-  const { query, hiddenTables } = req.body;
-  
-  if (!hiddenTables || hiddenTables.length === 0) {
-    return res.json({ valid: true });
-  }
-  
-  try {
-    // Extract table names from SQL query
-    const queryLower = query.toLowerCase();
-    
-    // Pattern untuk mendeteksi nama tabel dalam query
-    // Cocok dengan: FROM table_name, JOIN table_name, INTO table_name
-    const tablePatterns = [
-      /from\s+([a-z_][a-z0-9_]*)/gi,
-      /join\s+([a-z_][a-z0-9_]*)/gi,
-      /into\s+([a-z_][a-z0-9_]*)/gi,
-      /update\s+([a-z_][a-z0-9_]*)/gi,
-      /table\s+([a-z_][a-z0-9_]*)/gi
-    ];
-    
-    const tablesInQuery = new Set();
-    
-    for (const pattern of tablePatterns) {
-      let match;
-      while ((match = pattern.exec(queryLower)) !== null) {
-        // Ambil nama tabel (group 1)
-        const tableName = match[1].trim();
-        // Skip SQL keywords
-        const sqlKeywords = ['select', 'where', 'group', 'order', 'having', 'limit', 'offset', 'inner', 'outer', 'left', 'right', 'cross'];
-        if (!sqlKeywords.includes(tableName)) {
-          tablesInQuery.add(tableName);
-        }
-      }
-    }
-    
-    console.log('Tables found in query:', Array.from(tablesInQuery));
-    console.log('Hidden tables:', hiddenTables);
-    
-    // Check jika ada tabel yang tersembunyi
-    const blockedTables = [];
-    for (const table of tablesInQuery) {
-      if (hiddenTables.includes(table)) {
-        blockedTables.push(table);
-      }
-    }
-    
-    if (blockedTables.length > 0) {
-      return res.json({
-        valid: false,
-        blockedTables: blockedTables,
-        message: `Query menggunakan tabel yang disembunyikan: ${blockedTables.join(', ')}`
-      });
-    }
-    
-    res.json({ valid: true });
-    
-  } catch (error) {
-    console.error('Error validating query:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-const PORT = process.env.PORT || 5002;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
 });

@@ -16,7 +16,6 @@ const BuatAnalisis = () => {
   
   // State untuk data
   const [visualisasiData, setVisualisasiData] = useState([]);
-  const [parameterData, setParameterData] = useState([]);
   
   // State untuk seleksi
   const [selectedVisualisasi, setSelectedVisualisasi] = useState([]);
@@ -79,12 +78,6 @@ const BuatAnalisis = () => {
             return new Date(b.created_at) - new Date(a.created_at);
           });
           setVisualisasiData(sortedVisualisasi);
-        }
-        
-        const parameterResponse = await fetch(`http://localhost:5002/api/database/${selectedDatabase}/parameter_visualisasi`);
-        if (parameterResponse.ok) {
-          const parameter = await parameterResponse.json();
-          setParameterData(parameter);
         }
       } catch (err) {
         console.error('Error fetching data:', err);
@@ -191,15 +184,46 @@ const BuatAnalisis = () => {
       }
     }
   };
+
+  // Fungsi helper untuk konversi data ke number
+  const parseChartData = (data, xKey, yKey, chartType) => {
+    if (!data) return [];
+    
+    return data.map(item => {
+      const parsedItem = { ...item };
+      
+      // Konversi yKey ke number jika berupa string
+      if (yKey && parsedItem[yKey] !== undefined && parsedItem[yKey] !== null) {
+        const numValue = parseFloat(parsedItem[yKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[yKey] = numValue;
+        }
+      }
+      
+      // Hanya untuk scatter chart, konversi xKey ke number
+      if (chartType === 'scatter' && xKey && parsedItem[xKey] !== undefined && parsedItem[xKey] !== null) {
+        const numValue = parseFloat(parsedItem[xKey]);
+        if (!isNaN(numValue)) {
+          parsedItem[xKey] = numValue;
+        }
+      }
+      
+      return parsedItem;
+    });
+  };
   
   // Fungsi untuk render grafik berdasarkan jenis
   const renderChart = (visualisasi, chartData) => {
     if (!chartData || chartData.length === 0) return null;
     
-    const parameter = parameterData.find(p => p.id_visualisasi === visualisasi.id_visualisasi);
-    if (!parameter) return null;
+    // Ambil parameter langsung dari visualisasi
+    const parameter_x = visualisasi.parameter_x;
+    const parameter_y = visualisasi.parameter_y;
     
-    const { parameter_x, parameter_y } = parameter;
+    if (!parameter_x || !parameter_y) return null;
+
+    // Parse chart data
+    const parsedChartData = parseChartData(chartData, parameter_x, parameter_y, visualisasi.jenis_grafik);
     
     const getColor = (index) => {
       const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
@@ -210,7 +234,7 @@ const BuatAnalisis = () => {
       case 'bar':
         return (
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartData}>
+            <BarChart data={parsedChartData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey={parameter_x} />
               <YAxis />
@@ -223,7 +247,7 @@ const BuatAnalisis = () => {
       case 'line':
         return (
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={chartData}>
+            <LineChart data={parsedChartData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey={parameter_x} />
               <YAxis />
@@ -242,7 +266,7 @@ const BuatAnalisis = () => {
               <YAxis type="number" dataKey={parameter_y} name={parameter_y} />
               <Tooltip cursor={{ strokeDasharray: '3 3' }} />
               <Legend />
-              <Scatter name={`${parameter_x} vs ${parameter_y}`} data={chartData} fill="#8884d8" />
+              <Scatter name={`${parameter_x} vs ${parameter_y}`} data={parsedChartData} fill="#8884d8" />
             </ScatterChart>
           </ResponsiveContainer>
         );
@@ -251,7 +275,7 @@ const BuatAnalisis = () => {
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={chartData}
+                data={parsedChartData}
                 cx="50%"
                 cy="50%"
                 labelLine={false}

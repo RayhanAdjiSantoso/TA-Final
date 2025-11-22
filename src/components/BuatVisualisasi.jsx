@@ -49,19 +49,20 @@ const BuatVisualisasi = () => {
         const databases = await response.json();
         setAvailableDatabases(databases);
         if (databases.length > 0) {
-          setSelectedDatabase(databases[0].value);
-          setSelectedDatabaseForSave(databases[0].value);
+          // Gunakan id_database (numerik) bukan value (string)
+          setSelectedDatabase(databases[0].id_database); 
+          setSelectedDatabaseForSave(databases[0].id_database);
         }
       }
     } catch (error) {
       console.error('Error fetching databases:', error);
       const defaultDatabases = [
-        { name: 'PostgreSQL Primary', value: 'postgresql_primary', host: 'localhost', port: 5432 },
-        { name: 'MySQL Secondary', value: 'mysql_secondary', host: 'localhost', port: 3306 }
+        { id_database: 1, name: 'PostgreSQL Primary', value: 'postgresql_primary', host: 'localhost', port: 5432 },
+        { id_database: 2, name: 'MySQL Secondary', value: 'mysql_secondary', host: 'localhost', port: 3306 }
       ];
       setAvailableDatabases(defaultDatabases);
-      setSelectedDatabase(defaultDatabases[0].value);
-      setSelectedDatabaseForSave(defaultDatabases[0].value);
+      setSelectedDatabase(defaultDatabases[0].id_database);
+      setSelectedDatabaseForSave(defaultDatabases[0].id_database);
     }
   };
 
@@ -152,7 +153,6 @@ const BuatVisualisasi = () => {
       }
     } catch (error) {
       console.error('Error validating hidden tables:', error);
-      // Jika validasi error, tetap lanjutkan (fail-safe)
     }
     
     try {
@@ -161,9 +161,42 @@ const BuatVisualisasi = () => {
       const params = {};
       queryParams.forEach(param => {
         if (param.name && param.value) {
-          params[param.name] = param.value;
+          let value = String(param.value).trim(); // PENTING: Konversi ke string dulu!
+          
+          console.log(`Processing parameter "${param.name}": original value = "${param.value}" (type: ${typeof param.value})`);
+          
+          // KONVERSI OTOMATIS: Deteksi format tanggal integer (YYYYMMDD) dan konversi ke string YYYY-MM-DD
+          if (/^\d{8}$/.test(value)) {
+            // Format: YYYYMMDD -> YYYY-MM-DD
+            const converted = `${value.substring(0,4)}-${value.substring(4,6)}-${value.substring(6,8)}`;
+            console.log(`✓ Auto-converted date parameter "${param.name}": ${value} -> ${converted}`);
+            value = converted;
+          }
+          // Deteksi format DD/MM/YYYY dan konversi ke YYYY-MM-DD
+          else if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+            const [day, month, year] = value.split('/');
+            const converted = `${year}-${month}-${day}`;
+            console.log(`✓ Auto-converted date parameter "${param.name}": ${param.value} -> ${converted}`);
+            value = converted;
+          }
+          // Format YYYY-MM-DD sudah benar
+          else if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            console.log(`✓ Date parameter "${param.name}" already in correct format: ${value}`);
+          }
+          else {
+            console.log(`→ Parameter "${param.name}" kept as-is: ${value}`);
+          }
+          
+          params[param.name] = value;
         }
       });
+      
+      console.log('=== FINAL PARAMS BEING SENT ===');
+      console.log('Params object:', params);
+      console.log('Params with types:', Object.entries(params).map(([key, val]) => 
+        `${key}: ${typeof val} = "${val}"`
+      ));
+      console.log('================================');
       
       const result = await executeQuery(sqlQuery, params);
       setQueryResult(result);
@@ -315,11 +348,28 @@ const BuatVisualisasi = () => {
     setTitleError(false);
     
     try {
+      // Simpan parameter query sebagai JSON string
+      const parameterQueryObject = {};
+      queryParams.forEach(param => {
+        if (param.name && param.value) {
+          parameterQueryObject[param.name] = param.value;
+        }
+      });
+      
+      const parameterQueryString = Object.keys(parameterQueryObject).length > 0 
+        ? JSON.stringify(parameterQueryObject)
+        : null;
+      
+      console.log('=== SAVING VISUALIZATION ===');
+      console.log('Query parameters:', parameterQueryObject);
+      console.log('Parameter query string:', parameterQueryString);
+      
       const visualisasiData = {
         judul: chartTitle,
         deskripsi: chartDescription,
         jenis_grafik: chartType,
         query_sql: sqlQuery,
+        parameter_query: parameterQueryString, // Tambahkan parameter_query
         chart_data: JSON.stringify(chartData),
         database: selectedDatabaseForSave,
         created_by: user.id_user
@@ -330,6 +380,8 @@ const BuatVisualisasi = () => {
         parameter_y: selectedParameters.yAxis,
         parameter_group: selectedParameters.groupBy || null
       };
+      
+      console.log('Visualisasi data being sent:', visualisasiData);
       
       const response = await fetch('http://localhost:5002/api/visualizations', {
         method: 'POST',
@@ -350,6 +402,7 @@ const BuatVisualisasi = () => {
           setSqlQuery('');
           setQueryResult([]);
           setChartData([]);
+          setQueryParams([{ name: '', value: '' }]); // Reset query params
           setSelectedParameters({
             xAxis: '',
             yAxis: '',
@@ -665,7 +718,7 @@ const BuatVisualisasi = () => {
               <select
                 id="database-select"
                 value={selectedDatabaseForSave}
-                onChange={(e) => setSelectedDatabaseForSave(e.target.value)}
+                onChange={(e) => setSelectedDatabaseForSave(parseInt(e.target.value))} // Parse ke integer
                 style={{
                   padding: '8px 12px',
                   borderRadius: '4px',
@@ -674,8 +727,8 @@ const BuatVisualisasi = () => {
                   width: '100%'
                 }}
               >
-                {availableDatabases.map((database, index) => (
-                  <option key={index} value={database.value}>
+                {availableDatabases.map((database) => (
+                  <option key={database.id_database} value={database.id_database}> {/* Gunakan id_database */}
                     {database.name} ({database.host}:{database.port || 'default'})
                   </option>
                 ))}
